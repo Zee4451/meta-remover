@@ -89,8 +89,16 @@ export class SampleGenerator {
     const bytes = new Uint8Array(buffer);
 
     // Build APP11 C2PA JUMBF manifest packet
-    const c2paStr = 'JPUM\x00c2pa.claim\x00urn:c2pa:OpenAI:DALL-E-3:Provenance:claim_generator=OpenAI DALL·E 3 Signature=sha256:8f4c71b9e2';
-    const c2paPayload = new TextEncoder().encode(c2paStr);
+    const c2paHeader = new TextEncoder().encode('JPUM');
+    const claim = new TextEncoder().encode('c2pa.claim');
+    const urn = new TextEncoder().encode('urn:c2pa:OpenAI:DALL-E-3:Provenance:claim_generator=OpenAI DALL-E 3 Signature=sha256:8f4c71b9e2');
+    const c2paPayload = new Uint8Array(c2paHeader.length + 1 + claim.length + 1 + urn.length);
+    let c2paOffset = 0;
+    c2paPayload.set(c2paHeader, c2paOffset); c2paOffset += c2paHeader.length;
+    c2paPayload[c2paOffset++] = 0;
+    c2paPayload.set(claim, c2paOffset); c2paOffset += claim.length;
+    c2paPayload[c2paOffset++] = 0;
+    c2paPayload.set(urn, c2paOffset);
     const app11Chunk = this.createJPEGMarker(0xEB, c2paPayload);
 
     // Build APP13 IPTC packet with Google Gemini DigitalSourceType
