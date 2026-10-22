@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing and Media
+*.mp4
+*.mov
+*.jpg
+*.jpeg
+*.png
+*.webp
+!js/vendor/*
+
+# Production & Vercel
+.vercel
+dist/
+build/
+
+# System and logs
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.local
+.env.*.local

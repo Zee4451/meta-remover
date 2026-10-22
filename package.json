@@ -1,0 +1,22 @@
+{
+  "name": "ghostmeta-ai",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Client-side AI Metadata & C2PA Provenance Stripper for Images and Videos",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "ai-metadata-remover",
+    "c2pa-stripper",
+    "synthid-cleaner",
+    "exif-cleaner",
+    "chatgpt-metadata",
+    "gemini-metadata",
+    "midjourney-prompt-remover",
+    "stable-diffusion-cleaner"
+  ],
+  "author": "GhostMeta Team",
+  "license": "MIT"
+}
