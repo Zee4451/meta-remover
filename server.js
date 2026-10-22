@@ -36,7 +36,8 @@ const MIME_TYPES = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.mp4': 'video/mp4',
-  '.svg': 'image/svg+xml'
+  '.svg': 'image/svg+xml',
+  '.webmanifest': 'application/manifest+json; charset=utf-8'
 };
 
 const server = http.createServer((req, res) => {
@@ -130,6 +131,10 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`GhostMeta AI local server active at http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n======================================================`);
+  console.log(`🛡️ GhostMeta AI Mobile & Desktop Server Running:`);
+  console.log(`   • Desktop: http://localhost:${PORT}`);
+  console.log(`   • Mobile:  http://192.168.1.5:${PORT}`);
+  console.log(`======================================================\n`);
 });

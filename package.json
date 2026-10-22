@@ -18,5 +18,8 @@
     "stable-diffusion-cleaner"
   ],
   "author": "GhostMeta Team",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
 }

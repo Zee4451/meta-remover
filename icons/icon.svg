@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" />
+      <stop offset="50%" stop-color="#ec4899" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="16" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+  <!-- Background with rounded corners for maskable icons -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <!-- Glowing circle border -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="url(#shieldGrad)" stroke-width="4" opacity="0.3" />
+  
+  <!-- Shield outline -->
+  <g filter="url(#glow)">
+    <path d="M256 90 L390 145 C390 280 256 395 256 422 C256 395 122 280 122 145 Z" 
+          fill="url(#shieldGrad)" opacity="0.15" />
+    <path d="M256 90 L390 145 C390 280 256 395 256 422 C256 395 122 280 122 145 Z" 
+          fill="none" stroke="url(#shieldGrad)" stroke-width="14" stroke-linejoin="round" />
+  </g>
+
+  <!-- Ghost & Meta cleaner emblem -->
+  <!-- Ghost eyes / scanner visor -->
+  <path d="M190 220 Q256 160 322 220" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" />
+  <circle cx="210" cy="235" r="14" fill="#00f2fe" />
+  <circle cx="302" cy="235" r="14" fill="#00f2fe" />
+
+  <!-- Clean checkmark / spark -->
+  <path d="M205 315 L245 355 L315 275" fill="none" stroke="#10b981" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Orbiting spark -->
+  <circle cx="355" cy="165" r="10" fill="#facc15" />
+  <circle cx="160" cy="330" r="7" fill="#ec4899" />
+</svg>

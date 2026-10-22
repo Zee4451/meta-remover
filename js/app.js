@@ -17,6 +17,7 @@ class App {
     this.initElements();
     this.initEventListeners();
     this.initTheme();
+    this.initPWA();
   }
 
   initElements() {
@@ -316,6 +317,8 @@ class App {
   updateActionBar() {
     if (this.queue.length === 0) {
       this.actionBar.style.display = 'none';
+      const mobileStickyBar = document.getElementById('mobileStickyBar');
+      if (mobileStickyBar) mobileStickyBar.style.display = 'none';
       return;
     }
 
@@ -327,6 +330,20 @@ class App {
       this.downloadZipBtn.style.display = 'inline-flex';
     } else {
       this.downloadZipBtn.style.display = 'none';
+    }
+
+    // Sync Mobile Floating Sticky Bar
+    const mobileStickyBar = document.getElementById('mobileStickyBar');
+    const mobileBarInfo = document.getElementById('mobileBarInfo');
+    const mobileDownloadZipBtn = document.getElementById('mobileDownloadZipBtn');
+    if (mobileStickyBar) {
+      mobileStickyBar.style.display = 'flex';
+      if (mobileBarInfo) {
+        mobileBarInfo.textContent = `${this.queue.length} file(s) (${cleanedCount} clean)`;
+      }
+      if (mobileDownloadZipBtn) {
+        mobileDownloadZipBtn.style.display = cleanedCount > 0 ? 'inline-flex' : 'none';
+      }
     }
   }
 
@@ -583,7 +600,27 @@ class App {
 
     const blob = item.result.cleanedBlob;
 
-    // 1. Primary Method: Native File System Access API (Immediate Windows "Save As" Dialog)
+    // 0. Primary for Mobile (Android & iOS): Native Web Share API
+    // Opens phone's share sheet to save directly to Gallery / Photos or send to WhatsApp / Telegram!
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
+    const shareFile = new File([blob], filename, { type: blob.type || 'video/mp4' });
+
+    if (isMobile && navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+      try {
+        await navigator.share({
+          files: [shareFile],
+          title: filename,
+          text: 'AI Metadata & Watermarks removed with GhostMeta AI'
+        });
+        this.showToast(`Shared ${filename}!`, 'success');
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return; // User closed share sheet
+        console.warn('Mobile share sheet dismissed, falling back:', err);
+      }
+    }
+
+    // 1. Primary Method for Desktop: Native File System Access API (Immediate Windows "Save As" Dialog)
     // Runs synchronously on the user's click gesture so Chrome/Windows pops up the file picker directly!
     if (window.showSaveFilePicker) {
       try {
@@ -957,6 +994,89 @@ class App {
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  }
+
+  initPWA() {
+    // 1. Service Worker registration
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').then(reg => {
+          console.log('GhostMeta PWA Service Worker registered:', reg.scope);
+        }).catch(err => {
+          console.warn('GhostMeta SW registration failed:', err);
+        });
+      });
+    }
+
+    // 2. Install App button logic
+    const installBtn = document.getElementById('installAppBtn');
+    let deferredPrompt = null;
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      if (installBtn) {
+        installBtn.style.display = 'inline-flex';
+      }
+    });
+
+    if (installBtn) {
+      installBtn.addEventListener('click', async () => {
+        if (deferredPrompt) {
+          deferredPrompt.prompt();
+          const { outcome } = await deferredPrompt.userChoice;
+          if (outcome === 'accepted') {
+            installBtn.style.display = 'none';
+            this.showToast('GhostMeta installed to Home Screen!', 'success');
+          }
+          deferredPrompt = null;
+        } else {
+          // If iOS or already installed, open mobile QR modal with tips
+          const mobileModal = document.getElementById('mobileModal');
+          if (mobileModal) mobileModal.classList.add('open');
+        }
+      });
+    }
+
+    // 3. Mobile Connect QR Modal
+    const mobileConnectBtn = document.getElementById('mobileConnectBtn');
+    const mobileModal = document.getElementById('mobileModal');
+    const closeMobileModalBtn = document.getElementById('closeMobileModalBtn');
+    const copyMobileUrlBtn = document.getElementById('copyMobileUrlBtn');
+
+    if (mobileConnectBtn && mobileModal) {
+      mobileConnectBtn.addEventListener('click', () => {
+        mobileModal.classList.add('open');
+      });
+    }
+
+    if (closeMobileModalBtn && mobileModal) {
+      closeMobileModalBtn.addEventListener('click', () => {
+        mobileModal.classList.remove('open');
+      });
+      mobileModal.addEventListener('click', (e) => {
+        if (e.target === mobileModal) mobileModal.classList.remove('open');
+      });
+    }
+
+    if (copyMobileUrlBtn) {
+      copyMobileUrlBtn.addEventListener('click', () => {
+        const url = document.getElementById('mobileUrlDisplay')?.textContent || 'http://192.168.1.5:3000';
+        navigator.clipboard.writeText(url).then(() => {
+          this.showToast('Mobile URL copied to clipboard!', 'success');
+        });
+      });
+    }
+
+    // 4. Mobile Sticky Bar action buttons
+    const mobileCleanBtn = document.getElementById('mobileCleanBtn');
+    const mobileDownloadZipBtn = document.getElementById('mobileDownloadZipBtn');
+    if (mobileCleanBtn) {
+      mobileCleanBtn.addEventListener('click', () => this.processAllPending());
+    }
+    if (mobileDownloadZipBtn) {
+      mobileDownloadZipBtn.addEventListener('click', () => this.downloadAllAsZip());
+    }
   }
 
   escapeHtml(str) {
