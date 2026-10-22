@@ -1110,38 +1110,88 @@ progress::-moz-progress-bar {
   background: rgba(255, 255, 255, 0.02);
 }
 
-.comparison-title {
-  font-size: 0.85rem;
+.modal-title {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
   font-weight: 700;
-  margin-bottom: 12px;
+  color: #ffffff !important;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+}
+
+.tab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tab-btn.active {
+  background: rgba(139, 92, 246, 0.25) !important;
+  border-color: rgba(139, 92, 246, 0.6) !important;
+  color: #c084fc !important;
+}
+
+/* Comparison View */
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.comparison-col {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.comparison-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  margin-bottom: 14px;
+  color: #f8fafc;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .meta-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.8rem;
+  font-size: 0.84rem;
 }
 
 .meta-table tr {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .meta-table td {
-  padding: 6px 4px;
+  padding: 8px 6px;
 }
 
 .meta-table td:first-child {
-  color: var(--text-muted);
+  color: #94a3b8 !important;
   font-weight: 500;
-  width: 40%;
+  width: 48%;
 }
 
 .meta-table td:last-child {
-  color: var(--text-primary);
+  color: #f8fafc !important;
   font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 /* FAQ & Educational Section */
