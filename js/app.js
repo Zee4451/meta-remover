@@ -194,8 +194,7 @@ class App {
   }
 
   initTheme() {
-    const savedTheme = localStorage.getItem('ghostmeta-theme') || 
-      (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    const savedTheme = localStorage.getItem('ghostmeta-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
     this.updateThemeIcons(savedTheme);
   }
