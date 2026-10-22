@@ -1280,12 +1280,14 @@ progress::-moz-progress-bar {
 .mobile-qr-modal {
   max-width: 440px;
   text-align: center;
-  background: #11141d;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #0d1117 !important;
+  color: #f8fafc !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8) !important;
 }
 
 .mobile-qr-modal .modal-title {
-  color: #ffffff;
+  color: #ffffff !important;
 }
 
 .mobile-qr-body {
@@ -1294,13 +1296,18 @@ progress::-moz-progress-bar {
   flex-direction: column;
   align-items: center;
   gap: 16px;
+  color: #f1f5f9 !important;
 }
 
 .mobile-qr-instruction {
-  font-size: 0.92rem;
-  color: #e2e8f0;
+  font-size: 0.95rem;
+  color: #f1f5f9 !important;
   line-height: 1.5;
   margin: 0;
+}
+
+.mobile-qr-instruction strong {
+  color: #38bdf8 !important;
 }
 
 .qr-wrapper {
@@ -1358,30 +1365,34 @@ progress::-moz-progress-bar {
 }
 
 .pwa-install-tips {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius-md);
-  padding: 14px;
+  padding: 14px 16px;
   text-align: left;
   width: 100%;
 }
 
 .pwa-install-tips h4 {
   margin: 0 0 8px 0;
-  font-size: 0.88rem;
-  color: #ffffff;
+  font-size: 0.9rem;
+  color: #38bdf8 !important;
 }
 
 .pwa-install-tips ul {
   margin: 0;
   padding-left: 20px;
-  font-size: 0.82rem;
-  color: #cbd5e1;
+  font-size: 0.84rem;
+  color: #f1f5f9 !important;
   line-height: 1.6;
 }
 
+.pwa-install-tips li {
+  color: #f1f5f9 !important;
+}
+
 .pwa-install-tips strong {
-  color: #f8fafc;
+  color: #ffffff !important;
 }
 
 /* Mobile Sticky Bottom Action Bar */
