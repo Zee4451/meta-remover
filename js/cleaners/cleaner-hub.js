@@ -30,25 +30,40 @@ export class CleanerHub {
 
     const isImage = file.type.startsWith('image/') || /\.(jpg|jpeg|png|webp|avif)$/i.test(file.name);
     const isVideo = file.type.startsWith('video/') || /\.(mp4|mov|m4v|webm)$/i.test(file.name);
+    const name = file.name.toLowerCase();
 
-    if (options.scrubMode === 'deep' && isImage) {
-      // Deep Canvas Scrub
-      cleaningMethod = 'deep-canvas';
-      let targetFormat = 'image/png';
-      if (options.exportFormat === 'original') {
-        targetFormat = file.type || 'image/png';
-      } else if (options.exportFormat) {
-        targetFormat = options.exportFormat;
+    if (options.scrubMode === 'deep') {
+      if (isVideo) {
+        // Video Graceful Fallback: Canvas 2D cannot re-encode multi-track video/audio streams.
+        // Fall back to lossless container clean to preserve playback & audio synchronization.
+        cleaningMethod = 'lossless-video-fallback';
+        const cleanedBytes = MP4Cleaner.clean(originalBuffer);
+        cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
+      } else {
+        // Deep Canvas Scrub for images: re-renders pixels and micro-jitters frequency
+        cleaningMethod = 'deep-canvas';
+        let targetFormat = 'image/png';
+        if (options.exportFormat && options.exportFormat !== 'original') {
+          targetFormat = options.exportFormat;
+        } else {
+          // Preserve source container format to retain alpha transparency (PNG/WebP)
+          if (name.endsWith('.webp') || file.type === 'image/webp') {
+            targetFormat = 'image/webp';
+          } else if (name.endsWith('.jpg') || name.endsWith('.jpeg') || file.type === 'image/jpeg') {
+            targetFormat = 'image/jpeg';
+          } else {
+            targetFormat = 'image/png';
+          }
+        }
+
+        cleanedBlob = await CanvasCleaner.clean(file, {
+          format: targetFormat,
+          quality: options.quality || 0.98,
+          antiSynthID: options.antiSynthID ?? true
+        });
       }
-
-      cleanedBlob = await CanvasCleaner.clean(file, {
-        format: targetFormat,
-        quality: options.quality || 0.98,
-        antiSynthID: options.antiSynthID ?? true
-      });
     } else {
       // Lossless Container Stripping
-      const name = file.name.toLowerCase();
       let cleanedBytes = null;
 
       if (name.endsWith('.jpg') || name.endsWith('.jpeg') || file.type === 'image/jpeg') {
@@ -84,12 +99,17 @@ export class CleanerHub {
     const endTime = performance.now();
     const durationMs = Math.round(endTime - startTime);
 
-    // Generate output filename
+    // Generate output filename matching exact container format
     const extMatch = file.name.match(/\.[^.]+$/);
-    const ext = extMatch ? extMatch[0] : (isVideo ? '.mp4' : (isImage ? '.jpg' : ''));
-    const baseName = extMatch ? file.name.slice(0, -ext.length) : file.name;
+    let ext = extMatch ? extMatch[0].toLowerCase() : (isVideo ? '.mp4' : (isImage ? '.jpg' : ''));
+    if (cleaningMethod === 'deep-canvas') {
+      if (cleanedBlob.type === 'image/png') ext = '.png';
+      else if (cleanedBlob.type === 'image/webp') ext = '.webp';
+      else if (cleanedBlob.type === 'image/jpeg') ext = '.jpg';
+    }
+    const baseName = extMatch ? file.name.slice(0, -extMatch[0].length) : file.name;
     const safeBaseName = baseName.replace(/[<>:"/\\|?*]/g, '_').trim();
-    const cleanFileName = `${safeBaseName}_clean${ext || (cleanedBlob.type === 'image/png' ? '.png' : '.jpg')}`;
+    const cleanFileName = `${safeBaseName}_clean${ext}`;
 
     return {
       id: Math.random().toString(36).substring(2, 9),

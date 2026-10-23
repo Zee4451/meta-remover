@@ -12,7 +12,14 @@ export class JPEGCleaner {
    * @returns {Uint8Array} Cleaned JPEG buffer
    */
   static clean(buffer, options = { keepICC: true }) {
-    const bytes = new Uint8Array(buffer);
+    let bytes;
+    if (buffer instanceof Uint8Array) {
+      bytes = buffer;
+    } else if (buffer && buffer.buffer) {
+      bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    } else {
+      bytes = new Uint8Array(buffer);
+    }
     const len = bytes.length;
 
     // Check SOI marker (0xFF, 0xD8)

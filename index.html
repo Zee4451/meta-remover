@@ -25,7 +25,7 @@
   <div class="app-container">
     <!-- Header -->
     <header class="header">
-      <a href="#" class="brand">
+      <a href="/" class="brand" aria-label="GhostMeta AI Home">
         <div class="brand-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -106,7 +106,7 @@
           </svg>
         </div>
         <h2 class="dropzone-title">Drag & drop AI images or videos here</h2>
-        <p class="dropzone-subtitle">or browse files from your computer • You can also press <kbd>Ctrl+V</kbd> to paste</p>
+        <p class="dropzone-subtitle">or browse files from your computer<span id="pasteHint"> • You can also press <kbd id="pasteKbd">Ctrl+V</kbd> to paste</span></p>
         <button type="button" class="btn-upload" id="browseBtn">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
@@ -125,7 +125,7 @@
         </div>
 
         <!-- Sample Loaders for Quick 1-Click Testing -->
-        <div class="sample-bar">
+        <div class="sample-bar" role="toolbar" aria-label="Sample test presets">
           <span class="sample-label">Want to test right now?</span>
           <button type="button" class="btn-sample" id="sampleSdBtn">
             <span>✨</span> Try Stable Diffusion PNG
@@ -405,10 +405,10 @@
   </div>
 
   <!-- Mobile Connect QR Modal -->
-  <div class="modal-overlay" id="mobileModal">
+  <div class="modal-overlay" id="mobileModal" role="dialog" aria-modal="true" aria-labelledby="mobileModalTitle">
     <div class="modal-content mobile-qr-modal">
       <div class="modal-header">
-        <h2 class="modal-title">
+        <h2 class="modal-title" id="mobileModalTitle">
           <span>📱</span> Open on Mobile Phone
         </h2>
         <button class="modal-close-btn" id="closeMobileModalBtn" aria-label="Close modal">

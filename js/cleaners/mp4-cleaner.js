@@ -14,7 +14,14 @@ export class MP4Cleaner {
    */
   static clean(buffer) {
     // Clone buffer so we can modify in-place safely
-    const bytes = new Uint8Array(buffer.slice(0));
+    let bytes;
+    if (buffer instanceof Uint8Array) {
+      bytes = new Uint8Array(buffer.slice(0));
+    } else if (buffer && buffer.buffer) {
+      bytes = new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+    } else {
+      bytes = new Uint8Array(buffer.slice(0));
+    }
     const len = bytes.length;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 

@@ -36,6 +36,15 @@ export class CanvasCleaner {
             throw new Error('Canvas 2D context unavailable.');
           }
 
+          // If output format is JPEG, composite over white background (JPEG has no alpha channel)
+          // For PNG and WebP, preserve 100% alpha transparency
+          if (format === 'image/jpeg') {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, width, height);
+          } else {
+            ctx.clearRect(0, 0, width, height);
+          }
+
           // Draw pristine image onto canvas
           ctx.drawImage(img, 0, 0, width, height);
 
@@ -48,6 +57,9 @@ export class CanvasCleaner {
             // Microscopic 1-bit pseudo-random perturbation
             // Breaks frequency domain correlation without perceptible visual impact
             for (let i = 0; i < len; i += 4) {
+              // Skip transparent pixels so we never introduce noise or color fringing to transparent areas
+              if (data[i + 3] === 0) continue;
+
               // Apply +-1 to RGB channels probabilistically
               const noiseR = (Math.random() > 0.5 ? 1 : -1) * (Math.random() < 0.25 ? 1 : 0);
               const noiseG = (Math.random() > 0.5 ? 1 : -1) * (Math.random() < 0.25 ? 1 : 0);

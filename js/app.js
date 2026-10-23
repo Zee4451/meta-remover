@@ -4,9 +4,9 @@
  * sample creation, theme toggling, and the metadata inspector modal.
  */
 
-import { CleanerHub } from './cleaners/cleaner-hub.js?v=4';
-import { SampleGenerator } from './utils/samples.js?v=4';
-import { AIDetector } from './detectors/ai-detector.js?v=4';
+import { CleanerHub } from './cleaners/cleaner-hub.js?v=11';
+import { SampleGenerator } from './utils/samples.js?v=11';
+import { AIDetector } from './detectors/ai-detector.js?v=11';
 
 class App {
   constructor() {
@@ -77,17 +77,56 @@ class App {
   }
 
   initEventListeners() {
+    // Brand link smooth scroll (prevent # jump)
+    const brandLink = document.querySelector('.brand');
+    if (brandLink) {
+      brandLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    }
+
+    // Dynamic paste shortcut: ⌘+V on Mac, Ctrl+V on Windows/Linux, hidden on touch mobile
+    const pasteHint = document.getElementById('pasteHint');
+    if (pasteHint) {
+      const isMac = /Mac|iPod|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+      const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+      if (isTouch && window.innerWidth < 768) {
+        if (pasteHint.parentElement) {
+          pasteHint.parentElement.style.display = 'none';
+        }
+      } else if (isMac) {
+        pasteHint.textContent = '⌘+V';
+      } else {
+        pasteHint.textContent = 'Ctrl+V';
+      }
+    }
+
+    // Prevent clicks inside sample bar from bubbling to dropzone fileInput
+    const sampleBar = document.querySelector('.sample-bar');
+    if (sampleBar) {
+      sampleBar.addEventListener('click', (e) => e.stopPropagation());
+      sampleBar.addEventListener('keydown', (e) => e.stopPropagation());
+    }
+
     // Dropzone events
     this.browseBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.fileInput.click();
     });
 
-    this.dropzone.addEventListener('click', () => {
+    this.dropzone.addEventListener('click', (e) => {
+      // Do not trigger file upload if sample button, sample bar, or nested button was clicked
+      if (e.target.closest('.sample-bar') || e.target.closest('button')) {
+        return;
+      }
       this.fileInput.click();
     });
 
     this.dropzone.addEventListener('keydown', (e) => {
+      if (e.target.closest('.sample-bar') || e.target.tagName === 'BUTTON') {
+        return;
+      }
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         this.fileInput.click();
@@ -118,7 +157,7 @@ class App {
       }
     });
 
-    // Clipboard Paste support (Ctrl+V anywhere)
+    // Clipboard Paste support (Ctrl+V or Cmd+V anywhere)
     window.addEventListener('paste', (e) => {
       if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
         this.addFiles(Array.from(e.clipboardData.files));
@@ -174,9 +213,17 @@ class App {
     this.inspectorModal.addEventListener('click', (e) => {
       if (e.target === this.inspectorModal) this.closeModal();
     });
+
+    // Universal Escape key closes any open modal (Inspector or Mobile QR dialog)
     window.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this.inspectorModal.classList.contains('open')) {
-        this.closeModal();
+      if (e.key === 'Escape') {
+        if (this.inspectorModal && this.inspectorModal.classList.contains('open')) {
+          this.closeModal();
+        }
+        const mobileModal = document.getElementById('mobileModal');
+        if (mobileModal && mobileModal.classList.contains('open')) {
+          mobileModal.classList.remove('open');
+        }
       }
     });
 
@@ -520,14 +567,25 @@ class App {
       if (downloadBtn) downloadBtn.style.display = 'inline-flex';
 
       if (badge) {
-        badge.className = 'badge-ai-threat badge-threat-clean';
-        badge.innerHTML = `
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            <path d="m9 12 2 2 4-4"/>
-          </svg>
-          Fully Cleaned
-        `;
+        if (result.cleaningMethod === 'lossless-video-fallback') {
+          badge.className = 'badge-ai-threat badge-threat-clean';
+          badge.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            Lossless (Video Preserved)
+          `;
+          badge.title = 'Video container stripped losslessly (Canvas deep scrub not applicable to multi-track video)';
+        } else {
+          badge.className = 'badge-ai-threat badge-threat-clean';
+          badge.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+            Fully Cleaned
+          `;
+        }
       }
 
       if (diff) {
@@ -584,7 +642,7 @@ class App {
   }
 
   /**
-   * Download single cleaned file
+   * Download single cleaned file (100% Client-Side, Zero Network Requests)
    */
   async downloadSingle(item) {
     if (!item.result || !item.result.cleanedBlob) return;
@@ -600,7 +658,7 @@ class App {
     const blob = item.result.cleanedBlob;
 
     // 0. Primary for Mobile (Android & iOS): Native Web Share API
-    // Opens phone's share sheet to save directly to Gallery / Photos or send to WhatsApp / Telegram!
+    // Opens phone's share sheet to save directly to Gallery / Photos or send to WhatsApp / Telegram
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
     const shareFile = new File([blob], filename, { type: blob.type || 'video/mp4' });
 
@@ -620,7 +678,6 @@ class App {
     }
 
     // 1. Primary Method for Desktop: Native File System Access API (Immediate Windows "Save As" Dialog)
-    // Runs synchronously on the user's click gesture so Chrome/Windows pops up the file picker directly!
     if (window.showSaveFilePicker) {
       try {
         const extMatch = filename.match(/\.[^.]+$/);
@@ -648,7 +705,7 @@ class App {
       }
     }
 
-    // 2. Direct Anchor with explicit File object and Blob URL
+    // 2. Direct Anchor with explicit File object and Blob URL (Zero network requests)
     try {
       const file = new File([blob], filename, { type: blob.type || 'video/mp4' });
       const url = URL.createObjectURL(file);
@@ -661,37 +718,16 @@ class App {
       setTimeout(() => {
         a.remove();
         URL.revokeObjectURL(url);
-      }, 60000);
+      }, 30000);
       this.showToast(`Downloading ${filename}...`, 'success');
     } catch (e) {
       console.warn('Blob anchor fallback:', e);
-    }
-
-    // 3. Background Local HTTP Streaming via hidden iframe
-    try {
-      const resp = await fetch('/api/store-download', {
-        method: 'POST',
-        headers: {
-          'x-filename': encodeURIComponent(filename),
-          'content-type': blob.type || 'video/mp4'
-        },
-        body: blob
-      });
-      if (resp.ok) {
-        const { downloadId } = await resp.json();
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = `/api/get-download?id=${downloadId}`;
-        document.body.appendChild(iframe);
-        setTimeout(() => iframe.remove(), 15000);
-      }
-    } catch (e) {
-      console.warn('Local HTTP download fallback:', e);
+      this.showToast(`Download failed: ${e.message}`, 'error');
     }
   }
 
   /**
-   * Batch download all cleaned files as a ZIP archive
+   * Batch download all cleaned files as a ZIP archive (100% Client-Side, Zero Network Requests)
    */
   async downloadAllAsZip() {
     const cleanedItems = this.queue.filter(q => q.status === 'done' && q.result?.cleanedBlob);
@@ -737,7 +773,7 @@ class App {
       }
     }
 
-    // 2. Direct Blob URL Download
+    // 2. Direct Blob URL Download (Zero network requests)
     try {
       const file = new File([zipBlob], zipName, { type: 'application/zip' });
       const url = URL.createObjectURL(file);
@@ -750,48 +786,12 @@ class App {
       setTimeout(() => {
         a.remove();
         URL.revokeObjectURL(url);
-      }, 60000);
+      }, 30000);
       this.showToast(`Downloaded ${cleanedItems.length} cleaned files in ZIP!`, 'success');
     } catch (e) {
       console.warn('ZIP blob fallback:', e);
+      this.showToast(`ZIP download error: ${e.message}`, 'error');
     }
-
-    // 3. Local HTTP iframe stream for ZIP
-    try {
-      const resp = await fetch('/api/store-download', {
-        method: 'POST',
-        headers: {
-          'x-filename': encodeURIComponent(zipName),
-          'content-type': 'application/zip'
-        },
-        body: zipBlob
-      });
-      if (resp.ok) {
-        const { downloadId } = await resp.json();
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = `/api/get-download?id=${downloadId}`;
-        document.body.appendChild(iframe);
-        setTimeout(() => iframe.remove(), 15000);
-      }
-    } catch (e) {
-      console.warn('ZIP HTTP download fallback:', e);
-    }
-
-    const URL = window.URL || window.webkitURL;
-    const a = document.createElementNS('http://www.w3.org/1999/xhtml', 'a');
-    a.download = zipName;
-    a.rel = 'noopener';
-    a.href = URL.createObjectURL(zipBlob);
-    document.body.appendChild(a);
-    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    
-    setTimeout(() => {
-      if (a.parentNode) a.parentNode.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(a.href), 180000);
-    }, 500);
-
-    this.showToast(`Downloaded ${cleanedItems.length} cleaned files in ZIP!`, 'success');
   }
 
   removeItem(item) {

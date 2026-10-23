@@ -5,7 +5,8 @@
   "description": "Client-side AI Metadata & C2PA Provenance Stripper for Images and Videos",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node scripts/generate-fixtures.js && node scripts/test-e2e.js"
   },
   "keywords": [
     "ai-metadata-remover",
@@ -23,6 +24,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "playwright": "^1.64.1",
     "vercel": "^65.2.0"
   }
 }

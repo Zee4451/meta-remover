@@ -1,6 +1,6 @@
 /**
  * GhostMeta AI - PNG Lossless Metadata Stripper
- * Removes all text chunks (tEXt, zTXt, iTXt), EXIF (eXIf), and C2PA manifests (caPt, c2pa)
+ * Removes all text chunks (tEXt, zTXt, iTXt), EXIF (eXIf), and C2PA manifests (caBX, caPt, c2pa, jumb)
  * while keeping all image data (IHDR, PLTE, IDAT, IEND, tRNS, sRGB/iCCP).
  */
 
@@ -12,7 +12,14 @@ export class PNGCleaner {
    * @returns {Uint8Array} Cleaned PNG buffer
    */
   static clean(buffer, options = { keepICC: true }) {
-    const bytes = new Uint8Array(buffer);
+    let bytes;
+    if (buffer instanceof Uint8Array) {
+      bytes = buffer;
+    } else if (buffer && buffer.buffer) {
+      bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    } else {
+      bytes = new Uint8Array(buffer);
+    }
     const len = bytes.length;
 
     // Check PNG signature: 89 50 4E 47 0D 0A 1A 0A
@@ -22,18 +29,19 @@ export class PNGCleaner {
       throw new Error('Invalid PNG signature.');
     }
 
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const chunks = [];
     chunks.push(bytes.slice(0, 8)); // 8-byte signature
 
     let offset = 8;
     const strippedChunksToDrop = new Set([
-      'tEXt', 'zTXt', 'iTXt', 'eXIf', 'caPt', 'c2pa', 'jumb', 'dSIG'
+      'tEXt', 'zTXt', 'iTXt', 'eXIf', 'caBX', 'caPt', 'c2pa', 'jumb', 'dSIG', 'prMm'
     ]);
 
     while (offset + 12 <= len) {
-      const length = (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
+      const length = view.getUint32(offset, false); // Big-endian unsigned 32-bit uint
       const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-      const chunkTotalLen = 4 + 4 + length + 4; // length + type + data + crc
+      const chunkTotalLen = 4 + 4 + length + 4; // length (4) + type (4) + data (length) + crc (4)
       const chunkEnd = offset + chunkTotalLen;
 
       if (chunkEnd > len) {

@@ -11,6 +11,7 @@ node_modules/
 *.png
 *.webp
 !js/vendor/*
+fixtures/
 
 # Production & Vercel
 .vercel

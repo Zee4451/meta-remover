@@ -12,7 +12,14 @@ export class AIDetector {
    * @returns {Promise<Object>} Detection results
    */
   static async detect(file, buffer) {
-    const bytes = new Uint8Array(buffer);
+    let bytes;
+    if (buffer instanceof Uint8Array) {
+      bytes = buffer;
+    } else if (buffer && buffer.buffer) {
+      bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    } else {
+      bytes = new Uint8Array(buffer);
+    }
     const result = {
       hasAIMetadata: false,
       aiConfidence: 'none', // 'none', 'low', 'medium', 'high'
@@ -222,7 +229,7 @@ export class AIDetector {
       } else if (type === 'eXIf') {
         result.rawFindings.push('PNG eXIf chunk detected');
         this.parseExif(data, result);
-      } else if (type === 'caPt' || type === 'c2pa' || type === 'jumb') {
+      } else if (type === 'caPt' || type === 'caBX' || type === 'c2pa' || type === 'jumb') {
         result.hasAIMetadata = true;
         result.rawFindings.push(`PNG ${type} (C2PA Manifest) detected`);
       }
