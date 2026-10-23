@@ -1060,7 +1060,7 @@ class App {
 
     if (copyMobileUrlBtn) {
       copyMobileUrlBtn.addEventListener('click', () => {
-        const url = document.getElementById('mobileUrlDisplay')?.textContent || 'http://192.168.1.5:3000';
+        const url = document.getElementById('mobileUrlDisplay')?.textContent || 'https://ghostmeta-ai.vercel.app';
         navigator.clipboard.writeText(url).then(() => {
           this.showToast('Mobile URL copied to clipboard!', 'success');
         });

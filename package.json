@@ -21,5 +21,8 @@
   "license": "MIT",
   "dependencies": {
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "vercel": "^65.2.0"
   }
 }
