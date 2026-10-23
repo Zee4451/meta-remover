@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
-  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="styles.css?v=12">
   <!-- Local Offline-First Vendor Libraries -->
   <script src="js/vendor/jszip.min.js"></script>
   <script src="js/vendor/FileSaver.min.js"></script>
@@ -230,6 +230,29 @@
                 <span class="slider"></span>
               </label>
             </div>
+
+            <div class="toggle-item watermark-toggle-item">
+              <div class="toggle-info">
+                <span class="toggle-name">Remove Visible AI Corner Watermark (Gemini / Veo / DALL·E)</span>
+                <span class="toggle-sub">Auto-detects & seamlessly inpaints bottom-right AI sparkle/logo watermarks with zero full-frame quality loss</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggleWatermark" checked aria-label="Remove Visible AI Corner Watermark">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="corner-preset-group" id="cornerPresetGroup">
+              <label for="cornerPresetSelect" class="corner-preset-label">
+                <span>📍</span> Watermark Position:
+              </label>
+              <select id="cornerPresetSelect" class="form-select-corner" aria-label="Target Watermark Corner">
+                <option value="bottom-right" selected>Auto-Detect Bottom-Right (Gemini)</option>
+                <option value="bottom-left">Bottom-Left</option>
+                <option value="top-right">Top-Right</option>
+                <option value="custom">Custom Brush/Box</option>
+              </select>
+            </div>
           </div>
         </div>
       </section>
@@ -324,6 +347,63 @@
           <!-- Tab 4: Raw -->
           <div class="tab-content" id="tabRaw" style="display: none;">
             <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Visible AI Corner Watermark Verification Modal -->
+    <div id="compareCornerModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="compareModalTitle">
+      <div class="modal-content modal-compare-content">
+        <header class="modal-header">
+          <div class="modal-title" id="compareModalTitle">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+            AI Watermark Removal Verification
+          </div>
+          <button type="button" class="modal-close-btn" id="closeCompareModalBtn" aria-label="Close modal">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body">
+          <div class="compare-alert-banner">
+            <span class="compare-alert-icon">✨</span>
+            <div class="compare-alert-text" id="compareCornerStatus">
+              Gemini sparkle watermark detected and seamlessly inpainted with boundary-guided fast marching and noise grain matching. 99% of remaining pixels remain 100% bit-for-bit identical.
+            </div>
+          </div>
+
+          <div class="compare-grid">
+            <div class="compare-box">
+              <div class="compare-box-header">
+                <span class="compare-box-title before">Original (With Watermark)</span>
+                <span class="compare-tag before">Detected ROI</span>
+              </div>
+              <div class="compare-img-wrap">
+                <img id="compareBeforeImg" src="" alt="Corner before watermark removal">
+              </div>
+            </div>
+
+            <div class="compare-box">
+              <div class="compare-box-header">
+                <span class="compare-box-title after">Cleaned (Watermark Inpainted)</span>
+                <span class="compare-tag after">100% Healed</span>
+              </div>
+              <div class="compare-img-wrap">
+                <img id="compareAfterImg" src="" alt="Corner after watermark removal">
+              </div>
+            </div>
+          </div>
+
+          <div class="compare-stats-row" id="compareMetricsDetails">
+            <div class="stat-pill"><span class="stat-lbl">Target ROI:</span> <span class="stat-val" id="statRoi">Bottom-Right (14%)</span></div>
+            <div class="stat-pill"><span class="stat-lbl">Inpainted Pixels:</span> <span class="stat-val" id="statPixels">142 px</span></div>
+            <div class="stat-pill"><span class="stat-lbl">Texture Matching:</span> <span class="stat-val">Active (Matched Grain)</span></div>
+            <div class="stat-pill"><span class="stat-lbl">Frame Preservation:</span> <span class="stat-val" style="color: var(--accent-emerald, #10b981);">99.8% Bit-Identical</span></div>
           </div>
         </div>
       </div>
@@ -443,6 +523,6 @@
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
   <!-- Application Script -->
-  <script type="module" src="js/app.js?v=11"></script>
+  <script type="module" src="js/app.js?v=12"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
  * Provides offline caching for 100% client-side privacy on mobile and desktop.
  */
 
-const CACHE_NAME = 'ghostmeta-cache-v3';
+const CACHE_NAME = 'ghostmeta-cache-v12';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -22,6 +22,8 @@ const ASSETS_TO_CACHE = [
   '/js/cleaners/webp-cleaner.js',
   '/js/cleaners/mp4-cleaner.js',
   '/js/cleaners/canvas-cleaner.js',
+  '/js/cleaners/watermark-remover.js',
+  '/js/cleaners/video-watermark-cleaner.js',
   '/js/detectors/ai-detector.js',
   '/js/utils/samples.js'
 ];
@@ -29,7 +31,6 @@ const ASSETS_TO_CACHE = [
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
-      // Use individual promises so a single optional asset doesn't fail the whole installation
       return Promise.allSettled(
         ASSETS_TO_CACHE.map(url => cache.add(url).catch(err => console.warn('Cache error for', url, err)))
       );
@@ -48,7 +49,7 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('fetch', event => {
-  // Handle navigation requests specifically (PWA offline check)
+  // Navigation requests: Network first with offline index.html fallback
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request).catch(() => {
@@ -59,7 +60,22 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Handle static assets
+  // Network first for JS modules & CSS so updates apply immediately
+  const isCodeAsset = event.request.url.includes('/js/') || event.request.url.includes('.css');
+  if (isCodeAsset) {
+    event.respondWith(
+      fetch(event.request).then(networkResponse => {
+        if (networkResponse && networkResponse.status === 200) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseToCache));
+        }
+        return networkResponse;
+      }).catch(() => caches.match(event.request, { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // Stale-while-revalidate for other assets
   event.respondWith(
     caches.match(event.request, { ignoreSearch: true }).then(cachedResponse => {
       if (cachedResponse) {
@@ -75,10 +91,6 @@ self.addEventListener('fetch', event => {
         });
         return networkResponse;
       });
-    }).catch(() => {
-      if (event.request.headers.get('accept')?.includes('text/html')) {
-        return caches.match('/index.html', { ignoreSearch: true });
-      }
     })
   );
 });

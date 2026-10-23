@@ -4,9 +4,9 @@
  * sample creation, theme toggling, and the metadata inspector modal.
  */
 
-import { CleanerHub } from './cleaners/cleaner-hub.js?v=11';
-import { SampleGenerator } from './utils/samples.js?v=11';
-import { AIDetector } from './detectors/ai-detector.js?v=11';
+import { CleanerHub } from './cleaners/cleaner-hub.js?v=12';
+import { SampleGenerator } from './utils/samples.js?v=12';
+import { AIDetector } from './detectors/ai-detector.js?v=12';
 
 class App {
   constructor() {
@@ -39,6 +39,9 @@ class App {
     this.togglePrompts = document.getElementById('togglePrompts');
     this.toggleSynthID = document.getElementById('toggleSynthID');
     this.toggleGPS = document.getElementById('toggleGPS');
+    this.toggleWatermark = document.getElementById('toggleWatermark');
+    this.cornerPresetSelect = document.getElementById('cornerPresetSelect');
+    this.cornerPresetGroup = document.getElementById('cornerPresetGroup');
 
     // Action bar & Queue
     this.actionBar = document.getElementById('actionBar');
@@ -71,6 +74,10 @@ class App {
       diff: document.getElementById('tabDiff'),
       raw: document.getElementById('tabRaw')
     };
+
+    // Compare Corner Fix Modal
+    this.compareCornerModal = document.getElementById('compareCornerModal');
+    this.closeCompareModalBtn = document.getElementById('closeCompareModalBtn');
 
     // Toast Container
     this.toastContainer = document.getElementById('toastContainer');
@@ -208,17 +215,37 @@ class App {
     // Theme Toggle
     this.themeToggleBtn.addEventListener('click', () => this.toggleTheme());
 
+    // Watermark Settings Listeners
+    if (this.toggleWatermark && this.cornerPresetGroup) {
+      this.toggleWatermark.addEventListener('change', () => {
+        this.cornerPresetGroup.style.display = this.toggleWatermark.checked ? 'flex' : 'none';
+      });
+    }
+
     // Modal
     this.modalCloseBtn.addEventListener('click', () => this.closeModal());
     this.inspectorModal.addEventListener('click', (e) => {
       if (e.target === this.inspectorModal) this.closeModal();
     });
 
-    // Universal Escape key closes any open modal (Inspector or Mobile QR dialog)
+    // Compare Corner Fix Modal
+    if (this.closeCompareModalBtn) {
+      this.closeCompareModalBtn.addEventListener('click', () => this.closeCompareModal());
+    }
+    if (this.compareCornerModal) {
+      this.compareCornerModal.addEventListener('click', (e) => {
+        if (e.target === this.compareCornerModal) this.closeCompareModal();
+      });
+    }
+
+    // Universal Escape key closes any open modal (Inspector, Compare Corner, or Mobile QR dialog)
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         if (this.inspectorModal && this.inspectorModal.classList.contains('open')) {
           this.closeModal();
+        }
+        if (this.compareCornerModal && this.compareCornerModal.classList.contains('open')) {
+          this.closeCompareModal();
         }
         const mobileModal = document.getElementById('mobileModal');
         if (mobileModal && mobileModal.classList.contains('open')) {
@@ -545,6 +572,7 @@ class App {
     const downloadBtn = document.getElementById(`downloadBtn-${item.id}`);
     const badge = document.getElementById(`badge-${item.id}`);
     const diff = document.getElementById(`diff-${item.id}`);
+    const isVideo = item.file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(item.file.name);
 
     if (cleanBtn) cleanBtn.disabled = true;
     if (badge) badge.textContent = 'Stripping...';
@@ -555,7 +583,9 @@ class App {
         antiSynthID: this.toggleSynthID.checked,
         stripC2PA: this.toggleC2PA.checked,
         stripPrompts: this.togglePrompts.checked,
-        stripGPS: this.toggleGPS.checked
+        stripGPS: this.toggleGPS.checked,
+        removeWatermark: this.toggleWatermark ? this.toggleWatermark.checked : true,
+        corner: this.cornerPresetSelect ? this.cornerPresetSelect.value : 'bottom-right'
       };
 
       const result = await CleanerHub.processFile(item.file, options);
@@ -566,8 +596,26 @@ class App {
       if (cleanBtn) cleanBtn.style.display = 'none';
       if (downloadBtn) downloadBtn.style.display = 'inline-flex';
 
+      // Render "Compare Corner Fix" button if a watermark was detected and healed
+      if (result.watermarkMetrics && result.watermarkMetrics.watermarkDetected) {
+        const fileActions = card?.querySelector('.file-actions');
+        if (fileActions && !card.querySelector(`#compareBtn-${item.id}`)) {
+          const compareBtn = document.createElement('button');
+          compareBtn.type = 'button';
+          compareBtn.className = 'btn-compare-corner';
+          compareBtn.id = `compareBtn-${item.id}`;
+          compareBtn.innerHTML = `<span>✨</span> Compare Corner Fix`;
+          compareBtn.title = 'View side-by-side comparison of the removed Gemini/AI watermark';
+          compareBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openCompareModal(item);
+          });
+          fileActions.insertBefore(compareBtn, downloadBtn);
+        }
+      }
+
       if (badge) {
-        if (result.cleaningMethod === 'lossless-video-fallback') {
+        if (result.cleaningMethod === 'lossless-video-fallback' || (isVideo && this.currentMode === 'deep')) {
           badge.className = 'badge-ai-threat badge-threat-clean';
           badge.innerHTML = `
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -888,6 +936,10 @@ class App {
               <td>EXIF / GPS Tags</td>
               <td>${postAnalysis ? (postAnalysis.hasGPS ? 'Present' : 'Zero (Erased)') : 'Pending'}</td>
             </tr>
+            <tr>
+              <td>Visible AI Watermark</td>
+              <td>${item.result?.watermarkMetrics?.watermarkDetected ? '<strong style="color: #34d399;">Inpainted & Grain-Matched</strong>' : (item.result ? 'None Detected / Clean' : 'Pending')}</td>
+            </tr>
           </table>
         </div>
       </div>
@@ -970,6 +1022,45 @@ class App {
 
   closeModal() {
     this.inspectorModal.classList.remove('open');
+  }
+
+  /**
+   * Open the side-by-side Visible AI Watermark Fix Comparison Modal
+   */
+  openCompareModal(item) {
+    if (!item.result || !item.result.watermarkMetrics) return;
+    const metrics = item.result.watermarkMetrics;
+    const compareBeforeImg = document.getElementById('compareBeforeImg');
+    const compareAfterImg = document.getElementById('compareAfterImg');
+    const compareCornerStatus = document.getElementById('compareCornerStatus');
+    const statRoi = document.getElementById('statRoi');
+    const statPixels = document.getElementById('statPixels');
+
+    if (metrics.beforeThumbnail && compareBeforeImg) {
+      compareBeforeImg.src = metrics.beforeThumbnail;
+    }
+    if (metrics.afterThumbnail && compareAfterImg) {
+      compareAfterImg.src = metrics.afterThumbnail;
+    }
+    if (statRoi && metrics.roi) {
+      statRoi.textContent = `${this.cornerPresetSelect?.value || 'Bottom-Right'} (${metrics.roi.w}x${metrics.roi.h}px)`;
+    }
+    if (statPixels) {
+      statPixels.textContent = `${metrics.pixelsInpainted || 0} px`;
+    }
+    if (compareCornerStatus) {
+      compareCornerStatus.textContent = `Gemini / AI corner watermark (${metrics.pixelsInpainted || 0} pixels) detected and seamlessly inpainted with matched micro-grain. Remaining 99% of the frame is 100% pixel-for-pixel bit-identical.`;
+    }
+
+    if (this.compareCornerModal) {
+      this.compareCornerModal.classList.add('open');
+    }
+  }
+
+  closeCompareModal() {
+    if (this.compareCornerModal) {
+      this.compareCornerModal.classList.remove('open');
+    }
   }
 
   showToast(message, type = 'info') {

@@ -84,6 +84,41 @@ export class SampleGenerator {
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.fillText('Contains C2PA Credentials & SynthID tag', 200, 220);
 
+    // Draw authentic Google Gemini / Imagen 4-point sparkle watermark in bottom-right corner
+    const cx = 368;
+    const cy = 368;
+    const outerR = 14;
+    const innerR = 3;
+
+    ctx.save();
+    // Subtle translucent background halo
+    const glow = ctx.createRadialGradient(cx, cy, 2, cx, cy, 18);
+    glow.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
+    glow.addColorStop(0.3, 'rgba(255, 255, 255, 0.7)');
+    glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 4-point curved diamond star
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - outerR);
+    ctx.quadraticCurveTo(cx, cy, cx + outerR, cy);
+    ctx.quadraticCurveTo(cx, cy, cx, cy + outerR);
+    ctx.quadraticCurveTo(cx, cy, cx - outerR, cy);
+    ctx.quadraticCurveTo(cx, cy, cx, cy - outerR);
+    ctx.closePath();
+    ctx.fill();
+
+    // Bright specular center
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
     const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.95));
     const buffer = await blob.arrayBuffer();
     const bytes = new Uint8Array(buffer);
