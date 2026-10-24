@@ -5,6 +5,10 @@
  * while keeping 99% of the rest of the frame pixel-for-pixel bit-identical.
  */
 
+import { healSelectedBoxes, WatermarkBoxSelector } from './watermark-box-selector.js';
+
+export { healSelectedBoxes, WatermarkBoxSelector };
+
 export class WatermarkRemover {
   /**
    * Remove corner watermark from an HTML5 Canvas context in-place.
@@ -20,13 +24,39 @@ export class WatermarkRemover {
     const {
       corner = 'bottom-right', // 'bottom-right', 'bottom-left', 'top-right', 'custom'
       customROI = null,
+      customBoxes = null,
+      currentTime = 0,
       dilationRadius = 3,
       noiseMatching = true,
       sensitivity = 1.0,
       temporalContext = null // Optional temporal accumulator for video frame sequences
     } = options;
 
-    // 1. Calculate Strict Region of Interest (ROI)
+    // 1. Multi-Box Interactive ROI Mode (User drawn boxes, corner presets & moving trackers)
+    if (customBoxes && customBoxes.length > 0) {
+      const activeBoxes = customBoxes.filter(b => currentTime >= (b.startTime ?? 0) && currentTime <= (b.endTime ?? Infinity));
+      const targetBox = activeBoxes[0] || customBoxes[0];
+      const bx = Math.max(0, Math.round(targetBox.x * width));
+      const by = Math.max(0, Math.round(targetBox.y * height));
+      const bw = Math.max(16, Math.min(width - bx, Math.round(targetBox.w * width)));
+      const bh = Math.max(16, Math.min(height - by, Math.round(targetBox.h * height)));
+
+      const beforeThumbnail = this.createThumbnailFromData(ctx.getImageData(bx, by, bw, bh), bw, bh);
+      const pixelsHealed = healSelectedBoxes(ctx, width, height, customBoxes, currentTime);
+      const afterThumbnail = this.createThumbnailFromData(ctx.getImageData(bx, by, bw, bh), bw, bh);
+
+      return {
+        watermarkDetected: true,
+        pixelsInpainted: pixelsHealed,
+        boxesInpainted: customBoxes.length,
+        customBoxes,
+        roi: { x: bx, y: by, w: bw, h: bh },
+        beforeThumbnail,
+        afterThumbnail
+      };
+    }
+
+    // 2. Default Automated Gemini Sparkle Detection in Corner ROI
     const roi = this.getROI(width, height, corner, customROI);
     if (roi.w <= 4 || roi.h <= 4) {
       return { watermarkDetected: false, pixelsInpainted: 0, roi };

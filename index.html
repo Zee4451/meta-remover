@@ -250,8 +250,11 @@
                 <option value="bottom-right" selected>Auto-Detect Bottom-Right (Gemini)</option>
                 <option value="bottom-left">Bottom-Left</option>
                 <option value="top-right">Top-Right</option>
-                <option value="custom">Custom Brush/Box</option>
+                <option value="custom">Custom Multi-Box / Moving Tracker</option>
               </select>
+              <button type="button" class="btn-box-selector" id="openBoxSelectorBtn" title="Draw custom watermark boxes or setup video tracker">
+                <span>🎯</span> Draw / Edit Custom Boxes
+              </button>
             </div>
           </div>
         </div>
@@ -404,6 +407,84 @@
             <div class="stat-pill"><span class="stat-lbl">Inpainted Pixels:</span> <span class="stat-val" id="statPixels">142 px</span></div>
             <div class="stat-pill"><span class="stat-lbl">Texture Matching:</span> <span class="stat-val">Active (Matched Grain)</span></div>
             <div class="stat-pill"><span class="stat-lbl">Frame Preservation:</span> <span class="stat-val" style="color: var(--accent-emerald, #10b981);">99.8% Bit-Identical</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Interactive ROI Watermark Bounding-Box Selector Modal -->
+    <div id="roiSelectorModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="roiModalTitle">
+      <div class="modal-content modal-roi-content">
+        <header class="modal-header">
+          <div class="modal-title" id="roiModalTitle">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>
+            </svg>
+            Interactive Watermark Bounding-Box Selector
+          </div>
+          <button type="button" class="modal-close-btn" id="closeRoiModalBtn" aria-label="Close modal">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+            </svg>
+          </button>
+        </header>
+        <div class="modal-body roi-modal-body">
+          <!-- Toolbar with Quick Presets -->
+          <div class="roi-toolbar">
+            <div class="roi-presets-bar">
+              <span class="roi-bar-lbl">Presets:</span>
+              <button type="button" class="btn-preset-pill active" id="roiPresetGemini" data-preset="bottom-right">✨ Auto Gemini (Bottom-Right)</button>
+              <button type="button" class="btn-preset-pill" data-preset="top-left">↖ Top-Left</button>
+              <button type="button" class="btn-preset-pill" data-preset="top-right">↗ Top-Right</button>
+              <button type="button" class="btn-preset-pill" data-preset="bottom-left">↙ Bottom-Left</button>
+              <button type="button" class="btn-preset-pill" data-preset="bottom-right-alt">↘ Bottom-Right</button>
+              <button type="button" class="btn-preset-pill" id="roiAddCustomBoxBtn" data-preset="draw-custom">➕ Draw Custom Box</button>
+              <button type="button" class="btn-preset-pill" id="roiClearBoxesBtn" data-preset="clear" style="color: #f87171;">🗑️ Clear All</button>
+            </div>
+
+            <!-- Video Motion Mode Selector (only visible for videos) -->
+            <div class="roi-motion-bar" id="roiMotionBar" style="display: none;">
+              <span class="roi-bar-lbl">Video Motion Mode:</span>
+              <div class="motion-pills">
+                <button type="button" class="btn-motion-pill active" data-motion="static" title="Fixed position on all frames">Static Box</button>
+                <button type="button" class="btn-motion-pill" data-motion="keyframe" title="Time-gated active boxes for corner switching">Keyframe / Jumping</button>
+                <button type="button" class="btn-motion-pill" data-motion="autotrack" title="Template-matching tracker for floating/bouncing watermarks">Auto-Track Moving (Sora)</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="roi-instructions">
+            <span>💡 <strong>Tip:</strong> Click &amp; drag anywhere on the preview to draw custom watermark boxes. Touch gestures supported on mobile. Click the red <strong>×</strong> on any box to delete it.</span>
+          </div>
+
+          <!-- Preview Viewport Container -->
+          <div class="roi-viewport-container" id="roiViewportContainer">
+            <div class="roi-media-wrapper" id="roiMediaWrapper">
+              <img id="roiPreviewImg" src="" alt="ROI Media Preview" style="display: none;">
+              <video id="roiPreviewVideo" playsinline preload="auto" style="display: none;"></video>
+              <canvas id="roiOverlayCanvas"></canvas>
+            </div>
+
+            <!-- Video Scrubber Bar (visible only for videos) -->
+            <div class="roi-video-scrubber-bar" id="roiVideoScrubberBar" style="display: none;">
+              <button type="button" class="btn-video-play" id="roiPlayPauseBtn" aria-label="Play/Pause Video">▶</button>
+              <input type="range" class="roi-timeline" id="roiTimeline" min="0" max="100" value="0" step="0.01" aria-label="Video Timeline">
+              <span class="roi-time-display" id="roiTimeDisplay">00:00 / 00:00</span>
+            </div>
+          </div>
+
+          <!-- Status & Footer Actions -->
+          <div class="roi-footer-bar">
+            <div class="roi-status-info">
+              <span id="roiBoxesSummary">0 active boxes</span>
+              <span class="roi-preservation-hint">• 99% of remaining pixels stay 100% bit-for-bit identical</span>
+            </div>
+            <div class="roi-actions">
+              <button type="button" class="btn-secondary" id="cancelRoiBtn">Cancel</button>
+              <button type="button" class="btn-primary" id="applyRoiBtn">
+                <span>🛡️</span> Apply &amp; Save Boxes
+              </button>
+            </div>
           </div>
         </div>
       </div>

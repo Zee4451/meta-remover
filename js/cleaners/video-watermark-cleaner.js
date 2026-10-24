@@ -137,9 +137,11 @@ export class VideoWatermarkCleaner {
             // Draw pristine native video frame
             ctx.drawImage(video, 0, 0, width, height);
 
-            // Inpaint ONLY the bottom-right corner watermark with temporal smoothing across frames
+            // Inpaint ONLY the bottom-right corner watermark or custom boxes with temporal smoothing across frames
             WatermarkRemover.removeCornerWatermark(ctx, width, height, {
               ...options,
+              currentTime: video.currentTime || 0,
+              customBoxes: options.customBoxes || null,
               temporalContext
             });
 

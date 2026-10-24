@@ -7,12 +7,17 @@
 import { CleanerHub } from './cleaners/cleaner-hub.js?v=12';
 import { SampleGenerator } from './utils/samples.js?v=12';
 import { AIDetector } from './detectors/ai-detector.js?v=12';
+import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=12';
 
 class App {
   constructor() {
     this.queue = []; // Array of { id, file, result, status: 'pending'|'processing'|'done'|'error', thumbnail }
     this.currentMode = 'lossless'; // 'lossless' | 'deep'
     this.activeModalFile = null;
+    this.globalCustomBoxes = [];
+    this.activeRoiSelector = null;
+    this.activeRoiFileItem = null;
+    this.activeRoiMediaUrl = null;
 
     this.initElements();
     this.initEventListeners();
@@ -78,6 +83,28 @@ class App {
     // Compare Corner Fix Modal
     this.compareCornerModal = document.getElementById('compareCornerModal');
     this.closeCompareModalBtn = document.getElementById('closeCompareModalBtn');
+
+    // Interactive ROI Watermark Selector Modal
+    this.openBoxSelectorBtn = document.getElementById('openBoxSelectorBtn');
+    this.roiSelectorModal = document.getElementById('roiSelectorModal');
+    this.closeRoiModalBtn = document.getElementById('closeRoiModalBtn');
+    this.cancelRoiBtn = document.getElementById('cancelRoiBtn');
+    this.applyRoiBtn = document.getElementById('applyRoiBtn');
+    this.roiModalTitle = document.getElementById('roiModalTitle');
+    this.roiPresetGemini = document.getElementById('roiPresetGemini');
+    this.roiClearBoxesBtn = document.getElementById('roiClearBoxesBtn');
+    this.roiAddCustomBoxBtn = document.getElementById('roiAddCustomBoxBtn');
+    this.roiPresetButtons = document.querySelectorAll('#roiSelectorModal .btn-preset-pill');
+    this.roiMotionBar = document.getElementById('roiMotionBar');
+    this.roiMotionButtons = document.querySelectorAll('#roiSelectorModal .btn-motion-pill');
+    this.roiPreviewImg = document.getElementById('roiPreviewImg');
+    this.roiPreviewVideo = document.getElementById('roiPreviewVideo');
+    this.roiOverlayCanvas = document.getElementById('roiOverlayCanvas');
+    this.roiVideoScrubberBar = document.getElementById('roiVideoScrubberBar');
+    this.roiPlayPauseBtn = document.getElementById('roiPlayPauseBtn');
+    this.roiTimeline = document.getElementById('roiTimeline');
+    this.roiTimeDisplay = document.getElementById('roiTimeDisplay');
+    this.roiBoxesSummary = document.getElementById('roiBoxesSummary');
 
     // Toast Container
     this.toastContainer = document.getElementById('toastContainer');
@@ -222,6 +249,113 @@ class App {
       });
     }
 
+    if (this.cornerPresetSelect) {
+      this.cornerPresetSelect.addEventListener('change', () => {
+        if (this.cornerPresetSelect.value === 'custom') {
+          this.openRoiModal(null);
+        }
+      });
+    }
+
+    if (this.openBoxSelectorBtn) {
+      this.openBoxSelectorBtn.addEventListener('click', () => {
+        this.openRoiModal(null);
+      });
+    }
+
+    // ROI Modal Action Buttons
+    if (this.closeRoiModalBtn) {
+      this.closeRoiModalBtn.addEventListener('click', () => this.closeRoiModal());
+    }
+    if (this.cancelRoiBtn) {
+      this.cancelRoiBtn.addEventListener('click', () => this.closeRoiModal());
+    }
+    if (this.applyRoiBtn) {
+      this.applyRoiBtn.addEventListener('click', () => this.applyRoiBoxes());
+    }
+    if (this.roiSelectorModal) {
+      this.roiSelectorModal.addEventListener('click', (e) => {
+        if (e.target === this.roiSelectorModal) this.closeRoiModal();
+      });
+    }
+
+    // ROI Quick Preset Pills
+    this.roiPresetButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!this.activeRoiSelector) return;
+        const preset = btn.dataset.preset;
+        this.roiPresetButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        if (preset === 'clear') {
+          this.activeRoiSelector.clearBoxes();
+        } else if (preset === 'draw-custom') {
+          this.activeRoiSelector.addCustomBox();
+        } else if (preset === 'bottom-right-alt') {
+          this.activeRoiSelector.addCornerPreset('bottom-right');
+        } else {
+          this.activeRoiSelector.addCornerPreset(preset);
+        }
+      });
+    });
+
+    // ROI Video Motion Mode Pills
+    this.roiMotionButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!this.activeRoiSelector) return;
+        const motion = btn.dataset.motion;
+        this.roiMotionButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.activeRoiSelector.setMode(motion);
+
+        if (motion === 'autotrack') {
+          this.showToast('Auto-tracking active! Template signature captured for moving watermark.', 'info');
+        } else if (motion === 'keyframe') {
+          this.showToast('Keyframe mode: Scrubber position gates active boxes.', 'info');
+        }
+      });
+    });
+
+    // ROI Video Scrubber & Play/Pause
+    if (this.roiPlayPauseBtn && this.roiPreviewVideo) {
+      this.roiPlayPauseBtn.addEventListener('click', () => {
+        if (this.roiPreviewVideo.paused) {
+          this.roiPreviewVideo.play();
+          this.roiPlayPauseBtn.textContent = '⏸';
+        } else {
+          this.roiPreviewVideo.pause();
+          this.roiPlayPauseBtn.textContent = '▶';
+        }
+      });
+
+      this.roiPreviewVideo.addEventListener('timeupdate', () => {
+        const cur = this.roiPreviewVideo.currentTime || 0;
+        const dur = this.roiPreviewVideo.duration || 1;
+        if (this.roiTimeline) {
+          this.roiTimeline.value = (cur / dur) * 100;
+        }
+        if (this.roiTimeDisplay) {
+          const curM = Math.floor(cur / 60).toString().padStart(2, '0');
+          const curS = Math.floor(cur % 60).toString().padStart(2, '0');
+          const durM = Math.floor(dur / 60).toString().padStart(2, '0');
+          const durS = Math.floor(dur % 60).toString().padStart(2, '0');
+          this.roiTimeDisplay.textContent = `${curM}:${curS} / ${durM}:${durS}`;
+        }
+        if (this.activeRoiSelector) {
+          this.activeRoiSelector.render();
+        }
+      });
+
+      this.roiTimeline?.addEventListener('input', (e) => {
+        if (!this.roiPreviewVideo) return;
+        const dur = this.roiPreviewVideo.duration || 1;
+        this.roiPreviewVideo.currentTime = (parseFloat(e.target.value) / 100) * dur;
+        if (this.activeRoiSelector) {
+          this.activeRoiSelector.render();
+        }
+      });
+    }
+
     // Modal
     this.modalCloseBtn.addEventListener('click', () => this.closeModal());
     this.inspectorModal.addEventListener('click', (e) => {
@@ -238,9 +372,12 @@ class App {
       });
     }
 
-    // Universal Escape key closes any open modal (Inspector, Compare Corner, or Mobile QR dialog)
+    // Universal Escape key closes any open modal (Inspector, ROI Selector, Compare Corner, or Mobile QR dialog)
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (this.roiSelectorModal && this.roiSelectorModal.classList.contains('open')) {
+          this.closeRoiModal();
+        }
         if (this.inspectorModal && this.inspectorModal.classList.contains('open')) {
           this.closeModal();
         }
@@ -476,6 +613,9 @@ class App {
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
           </svg>
         </button>
+        <button type="button" class="btn-roi-item" id="roiBtn-${item.id}" title="Select / Edit Watermark Bounding Boxes & Motion Tracker">
+          <span>🎯</span> ROI Area
+        </button>
         <button type="button" class="btn-primary" id="cleanBtn-${item.id}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
@@ -501,6 +641,7 @@ class App {
     this.queueList.prepend(card);
 
     // Bind item buttons
+    card.querySelector(`#roiBtn-${item.id}`).addEventListener('click', () => this.openRoiModal(item));
     card.querySelector(`#cleanBtn-${item.id}`).addEventListener('click', () => this.processSingleItem(item));
     card.querySelector(`#inspectBtn-${item.id}`).addEventListener('click', () => this.openInspector(item));
     card.querySelector(`#deleteBtn-${item.id}`).addEventListener('click', () => this.removeItem(item));
@@ -578,6 +719,10 @@ class App {
     if (badge) badge.textContent = 'Stripping...';
 
     try {
+      const customBoxes = (item.customBoxes && item.customBoxes.length > 0)
+        ? item.customBoxes
+        : (this.globalCustomBoxes && this.globalCustomBoxes.length > 0 ? this.globalCustomBoxes : null);
+
       const options = {
         scrubMode: this.currentMode,
         antiSynthID: this.toggleSynthID.checked,
@@ -585,7 +730,8 @@ class App {
         stripPrompts: this.togglePrompts.checked,
         stripGPS: this.toggleGPS.checked,
         removeWatermark: this.toggleWatermark ? this.toggleWatermark.checked : true,
-        corner: this.cornerPresetSelect ? this.cornerPresetSelect.value : 'bottom-right'
+        corner: customBoxes ? 'custom' : (this.cornerPresetSelect ? this.cornerPresetSelect.value : 'bottom-right'),
+        customBoxes: customBoxes
       };
 
       const result = await CleanerHub.processFile(item.file, options);
@@ -1061,6 +1207,190 @@ class App {
     if (this.compareCornerModal) {
       this.compareCornerModal.classList.remove('open');
     }
+  }
+
+  /**
+   * Opens the Interactive Watermark Bounding-Box Selector & Moving Tracker Modal
+   * Can be opened for a specific queued file or for global scrubbing presets.
+   * 
+   * @param {Object|null} fileItem 
+   */
+  async openRoiModal(fileItem = null) {
+    this.activeRoiFileItem = fileItem;
+
+    let targetFile = fileItem?.file;
+    if (!targetFile && this.queue.length > 0) {
+      targetFile = this.queue[0].file;
+      this.activeRoiFileItem = this.queue[0];
+    }
+
+    if (this.roiModalTitle) {
+      const titleName = targetFile ? `ROI Watermark Editor — ${this.escapeHtml(targetFile.name)}` : 'Interactive Watermark Bounding-Box Selector';
+      this.roiModalTitle.innerHTML = `
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>
+        </svg>
+        ${titleName}
+      `;
+    }
+
+    // Determine media type
+    const isVideo = targetFile ? (targetFile.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(targetFile.name)) : false;
+
+    // Clean up any existing media URL and selector
+    if (this.activeRoiMediaUrl) {
+      URL.revokeObjectURL(this.activeRoiMediaUrl);
+      this.activeRoiMediaUrl = null;
+    }
+
+    if (this.activeRoiSelector) {
+      this.activeRoiSelector.destroy();
+      this.activeRoiSelector = null;
+    }
+
+    // Show or hide video-specific controls
+    if (this.roiMotionBar) this.roiMotionBar.style.display = isVideo ? 'flex' : 'none';
+    if (this.roiVideoScrubberBar) this.roiVideoScrubberBar.style.display = isVideo ? 'flex' : 'none';
+
+    let mediaElem = null;
+
+    if (isVideo) {
+      this.roiPreviewImg.style.display = 'none';
+      this.roiPreviewVideo.style.display = 'block';
+      mediaElem = this.roiPreviewVideo;
+      this.activeRoiMediaUrl = URL.createObjectURL(targetFile);
+      this.roiPreviewVideo.src = this.activeRoiMediaUrl;
+    } else {
+      this.roiPreviewVideo.style.display = 'none';
+      this.roiPreviewImg.style.display = 'block';
+      mediaElem = this.roiPreviewImg;
+
+      if (targetFile) {
+        this.activeRoiMediaUrl = URL.createObjectURL(targetFile);
+        this.roiPreviewImg.src = this.activeRoiMediaUrl;
+      } else {
+        // Generate sample image with authentic Gemini watermark so user can test immediately
+        try {
+          const sample = await SampleGenerator.createDalleGeminiSample();
+          this.activeRoiMediaUrl = URL.createObjectURL(sample);
+          this.roiPreviewImg.src = this.activeRoiMediaUrl;
+        } catch {
+          this.roiPreviewImg.src = '';
+        }
+      }
+    }
+
+    // Open modal
+    this.roiSelectorModal.classList.add('open');
+
+    // Setup selector once media has loaded
+    const setupSelector = () => {
+      if (this.activeRoiSelector) return;
+      this.activeRoiSelector = new WatermarkBoxSelector(mediaElem, this.roiOverlayCanvas, {
+        onChange: (boxes) => this.updateRoiSummary(boxes)
+      });
+
+      // Existing boxes priority: active item -> global custom boxes -> corner preset
+      const existing = (this.activeRoiFileItem?.customBoxes && this.activeRoiFileItem.customBoxes.length > 0)
+        ? this.activeRoiFileItem.customBoxes
+        : (this.globalCustomBoxes.length > 0 ? this.globalCustomBoxes : []);
+
+      if (existing.length > 0) {
+        this.activeRoiSelector.setBoxes(existing);
+      } else {
+        // Auto Gemini Bottom-Right preset default
+        this.activeRoiSelector.addCornerPreset('bottom-right');
+      }
+
+      this.activeRoiSelector.syncCanvasSize();
+      this.updateRoiSummary(this.activeRoiSelector.getBoxes());
+    };
+
+    if (isVideo) {
+      this.roiPreviewVideo.onloadedmetadata = () => {
+        setupSelector();
+        if (this.roiTimeDisplay) {
+          const dur = this.roiPreviewVideo.duration || 0;
+          const durM = Math.floor(dur / 60).toString().padStart(2, '0');
+          const durS = Math.floor(dur % 60).toString().padStart(2, '0');
+          this.roiTimeDisplay.textContent = `00:00 / ${durM}:${durS}`;
+        }
+      };
+    } else {
+      this.roiPreviewImg.onload = () => setupSelector();
+    }
+
+    // Fallback sync after modal animation
+    setTimeout(() => {
+      setupSelector();
+      if (this.activeRoiSelector) this.activeRoiSelector.syncCanvasSize();
+    }, 120);
+  }
+
+  closeRoiModal() {
+    this.roiSelectorModal?.classList.remove('open');
+    if (this.roiPreviewVideo) {
+      this.roiPreviewVideo.pause();
+      this.roiPreviewVideo.src = '';
+    }
+    if (this.roiPreviewImg) {
+      this.roiPreviewImg.src = '';
+    }
+    if (this.activeRoiMediaUrl) {
+      URL.revokeObjectURL(this.activeRoiMediaUrl);
+      this.activeRoiMediaUrl = null;
+    }
+    if (this.activeRoiSelector) {
+      this.activeRoiSelector.destroy();
+      this.activeRoiSelector = null;
+    }
+  }
+
+  applyRoiBoxes() {
+    if (!this.activeRoiSelector) {
+      this.closeRoiModal();
+      return;
+    }
+
+    const boxes = this.activeRoiSelector.getBoxes();
+    if (this.activeRoiFileItem) {
+      this.activeRoiFileItem.customBoxes = boxes;
+      // Update badge on item card
+      const badgeId = `roiBadge-${this.activeRoiFileItem.id}`;
+      let badgeElem = document.getElementById(badgeId);
+      const tagsContainer = document.getElementById(`tags-${this.activeRoiFileItem.id}`);
+
+      if (boxes.length > 0) {
+        if (!badgeElem && tagsContainer) {
+          badgeElem = document.createElement('span');
+          badgeElem.id = badgeId;
+          badgeElem.className = 'badge-roi-custom';
+          tagsContainer.appendChild(badgeElem);
+        }
+        if (badgeElem) {
+          badgeElem.innerHTML = `🎯 ${boxes.length} Custom Box${boxes.length === 1 ? '' : 'es'}`;
+        }
+      } else if (badgeElem) {
+        badgeElem.remove();
+      }
+
+      this.showToast(`Saved ${boxes.length} watermark box(es) for ${this.activeRoiFileItem.file.name}!`, 'success');
+    } else {
+      this.globalCustomBoxes = boxes;
+      this.showToast(`Saved ${boxes.length} watermark box(es) as global default!`, 'success');
+    }
+
+    if (boxes.length > 0 && this.cornerPresetSelect) {
+      this.cornerPresetSelect.value = 'custom';
+    }
+
+    this.closeRoiModal();
+  }
+
+  updateRoiSummary(boxes) {
+    if (!this.roiBoxesSummary) return;
+    const count = boxes ? boxes.length : 0;
+    this.roiBoxesSummary.textContent = `${count} active box${count === 1 ? '' : 'es'}`;
   }
 
   showToast(message, type = 'info') {

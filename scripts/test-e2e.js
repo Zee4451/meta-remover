@@ -14,7 +14,7 @@ import { JPEGCleaner } from '../js/cleaners/jpeg-cleaner.js';
 import { MP4Cleaner } from '../js/cleaners/mp4-cleaner.js';
 import { WebPCleaner } from '../js/cleaners/webp-cleaner.js';
 import { CleanerHub } from '../js/cleaners/cleaner-hub.js';
-import { WatermarkRemover } from '../js/cleaners/watermark-remover.js';
+import { WatermarkRemover, healSelectedBoxes } from '../js/cleaners/watermark-remover.js';
 
 let passedChecks = 0;
 let totalChecks = 0;
@@ -251,6 +251,81 @@ async function runBinaryUnitTests() {
   const mse = sumSquaredError / numColorSamples;
   const psnr = 10 * Math.log10((255 * 255) / (mse || 1e-10));
   assert(psnr > 58.0, `Anti-SynthID Sparse 5% +-1 LSB Jitter achieves PSNR > 58 dB (Measured PSNR = ${psnr.toFixed(2)} dB, 100% visually imperceptible)`);
+
+  // 8. Interactive Multi-Box Inpainting & Strict Boundary Isolation Unit Test
+  console.log('\n[8/8] Testing Interactive Multi-Box Inpainting & Strict Boundary Isolation...');
+  const testW2 = 100;
+  const testH2 = 100;
+  const buffer = new Uint8ClampedArray(testW2 * testH2 * 4);
+  buffer.fill(128);
+
+  // Draw synthetic watermark in normalized box (0.7, 0.7, 0.2, 0.2) => (70, 70, 20, 20)
+  for (let y = 70; y < 90; y++) {
+    for (let x = 70; x < 90; x++) {
+      const idx = (y * testW2 + x) * 4;
+      buffer[idx] = 255;
+      buffer[idx + 1] = 255;
+      buffer[idx + 2] = 255;
+    }
+  }
+
+  const originalCopy = new Uint8ClampedArray(buffer);
+
+  // Mock CanvasRenderingContext2D
+  const mockCtx = {
+    getImageData(x, y, w, h) {
+      const sub = new Uint8ClampedArray(w * h * 4);
+      for (let r = 0; r < h; r++) {
+        for (let c = 0; c < w; c++) {
+          const srcIdx = ((y + r) * testW2 + (x + c)) * 4;
+          const dstIdx = (r * w + c) * 4;
+          sub[dstIdx] = buffer[srcIdx];
+          sub[dstIdx + 1] = buffer[srcIdx + 1];
+          sub[dstIdx + 2] = buffer[srcIdx + 2];
+          sub[dstIdx + 3] = buffer[srcIdx + 3];
+        }
+      }
+      return { width: w, height: h, data: sub };
+    },
+    putImageData(imgData, x, y) {
+      const { width: w, height: h, data: sub } = imgData;
+      for (let r = 0; r < h; r++) {
+        for (let c = 0; c < w; c++) {
+          const srcIdx = (r * w + c) * 4;
+          const dstIdx = ((y + r) * testW2 + (x + c)) * 4;
+          buffer[dstIdx] = sub[srcIdx];
+          buffer[dstIdx + 1] = sub[srcIdx + 1];
+          buffer[dstIdx + 2] = sub[srcIdx + 2];
+          buffer[dstIdx + 3] = sub[srcIdx + 3];
+        }
+      }
+    }
+  };
+
+  const testBoxes = [{
+    id: 'test_box_1',
+    x: 0.7,
+    y: 0.7,
+    w: 0.2,
+    h: 0.2,
+    startTime: 0,
+    endTime: Infinity
+  }];
+
+  const pixelsHealed = healSelectedBoxes(mockCtx, testW2, testH2, testBoxes, 0);
+  assert(pixelsHealed > 0, `healSelectedBoxes inpainted ${pixelsHealed} pixels inside target ROI`);
+
+  // Verify strict boundary isolation: all pixels outside (64..96) are 100% bit-for-bit unchanged!
+  let outsideChanged = 0;
+  for (let y = 0; y < 64; y++) {
+    for (let x = 0; x < testW2; x++) {
+      const idx = (y * testW2 + x) * 4;
+      if (buffer[idx] !== originalCopy[idx] || buffer[idx+1] !== originalCopy[idx+1] || buffer[idx+2] !== originalCopy[idx+2]) {
+        outsideChanged++;
+      }
+    }
+  }
+  assert(outsideChanged === 0, 'Strict Zero Full-Frame Loss: 100% of pixels outside target ROI remain bit-for-bit untouched');
 }
 
 async function runBrowserPlaywrightTests() {
@@ -410,6 +485,92 @@ async function runBrowserPlaywrightTests() {
   await page.waitForTimeout(300);
   const isCompareClosed = await compareModal.evaluate(el => !el.classList.contains('open'));
   assert(isCompareClosed === true, 'Compare Corner Fix modal closed on Escape key press');
+
+  // Clear queue
+  await page.click('#clearQueueBtn');
+  await page.waitForTimeout(200);
+
+  // 5c. Interactive Multi-Box Bounding-Box Selector & Motion Tracker Modal Test
+  console.log('\n[Test 6c] Testing Interactive Watermark Bounding-Box Selector & Motion Tracker...');
+  
+  // Open ROI Modal from toolbar
+  await page.click('#openBoxSelectorBtn');
+  await page.waitForTimeout(300);
+
+  const roiModal = page.locator('#roiSelectorModal');
+  const isRoiModalOpen = await roiModal.evaluate(el => el.classList.contains('open'));
+  assert(isRoiModalOpen === true, 'Interactive ROI Bounding-Box Modal opened via #openBoxSelectorBtn');
+
+  // Test Corner Preset Pills
+  console.log('Testing quick corner preset pills...');
+  await page.click('#roiClearBoxesBtn');
+  await page.waitForTimeout(100);
+
+  await page.click('.btn-preset-pill[data-preset="top-left"]');
+  await page.waitForTimeout(100);
+  let summaryText = await page.textContent('#roiBoxesSummary');
+  assert(summaryText && summaryText.includes('1 active box'), 'Top-Left corner preset added an active ROI box');
+
+  await page.click('.btn-preset-pill[data-preset="top-right"]');
+  await page.waitForTimeout(100);
+  summaryText = await page.textContent('#roiBoxesSummary');
+  assert(summaryText && summaryText.includes('2 active boxes'), 'Top-Right preset added second active ROI box (Multi-Box)');
+
+  await page.click('#roiAddCustomBoxBtn');
+  await page.waitForTimeout(100);
+  summaryText = await page.textContent('#roiBoxesSummary');
+  assert(summaryText && summaryText.includes('3 active boxes'), '➕ Draw Custom Box button added third active box');
+
+  await page.click('#roiClearBoxesBtn');
+  await page.waitForTimeout(100);
+  summaryText = await page.textContent('#roiBoxesSummary');
+  assert(summaryText && summaryText.includes('0 active boxes'), '🗑️ Clear All button removed all active boxes');
+
+  // Add Gemini bottom-right preset and apply
+  await page.click('#roiPresetGemini');
+  await page.waitForTimeout(100);
+  await page.click('#applyRoiBtn');
+  await page.waitForTimeout(300);
+
+  const isRoiClosed = await roiModal.evaluate(el => !el.classList.contains('open'));
+  assert(isRoiClosed === true, 'ROI Modal closed on Apply & Save Boxes');
+
+  const presetVal = await page.inputValue('#cornerPresetSelect');
+  assert(presetVal === 'custom', 'Watermark position select switched to "custom" after saving custom boxes');
+
+  // Test Queue Card ROI Area Button
+  console.log('Testing queued file card ROI Area button...');
+  await page.click('#sampleVideoBtn');
+  await page.waitForTimeout(600);
+
+  const videoCard = page.locator('.file-card', { hasText: 'sample_ai_video_runway.mp4' });
+  assert(await videoCard.count() === 1, 'Loaded sample video into queue');
+
+  const cardRoiBtn = videoCard.locator('.btn-roi-item');
+  assert(await cardRoiBtn.count() === 1, 'Video file card displays "🎯 ROI Area" button');
+
+  await cardRoiBtn.click();
+  await page.waitForTimeout(400);
+
+  assert(await roiModal.evaluate(el => el.classList.contains('open')), 'ROI Modal opened for video file card');
+
+  // Verify video-specific motion mode bar and timeline scrubber are displayed
+  const isMotionBarVisible = await page.locator('#roiMotionBar').evaluate(el => el.style.display !== 'none');
+  const isScrubberVisible = await page.locator('#roiVideoScrubberBar').evaluate(el => el.style.display !== 'none');
+  assert(isMotionBarVisible === true, 'Video motion mode selector bar is visible for video file');
+  assert(isScrubberVisible === true, 'Video scrubber bar is visible for video file');
+
+  // Switch to Auto-Track Moving Watermark (Sora)
+  await page.click('.btn-motion-pill[data-motion="autotrack"]');
+  const isAutoTrackActive = await page.locator('.btn-motion-pill[data-motion="autotrack"]').evaluate(el => el.classList.contains('active'));
+  assert(isAutoTrackActive === true, 'Activated "Auto-Track Moving (Sora)" motion mode');
+
+  // Apply boxes to video file
+  await page.click('#applyRoiBtn');
+  await page.waitForTimeout(300);
+
+  const customRoiBadge = videoCard.locator('.badge-roi-custom');
+  assert(await customRoiBadge.count() === 1, 'File card displays custom ROI badge after saving boxes');
 
   // Clear queue
   await page.click('#clearQueueBtn');

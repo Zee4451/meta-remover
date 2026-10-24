@@ -44,7 +44,8 @@ export class CleanerHub {
         cleanedBlob = await VideoWatermarkCleaner.clean(file, {
           removeWatermark: true,
           corner: options.corner || 'bottom-right',
-          customROI: options.customROI || null
+          customROI: options.customROI || null,
+          customBoxes: options.customBoxes || null
         });
         watermarkMetrics = {
           watermarkDetected: true,
@@ -90,6 +91,7 @@ export class CleanerHub {
           removeWatermark: removeWatermark,
           corner: options.corner || 'bottom-right',
           customROI: options.customROI || null,
+          customBoxes: options.customBoxes || null,
           watermarkSensitivity: options.watermarkSensitivity || 1.0
         });
 
