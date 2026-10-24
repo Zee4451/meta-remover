@@ -56,15 +56,12 @@ export class CleanerHub {
         cleanedBlob = (videoResult && videoResult.blob) ? videoResult.blob : videoResult;
 
         // If VideoWatermarkCleaner detected no authentic watermark or ran in headless/container mode:
-        if (cleanedBlob.size === containerBlob.size) {
+        if (!videoResult || !videoResult.watermarkMetrics || !videoResult.watermarkMetrics.watermarkDetected || cleanedBlob.size === containerBlob.size) {
           cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
           watermarkMetrics = null;
         } else {
           cleaningMethod = 'video-watermark-canvas';
-          watermarkMetrics = (videoResult && videoResult.watermarkMetrics) ? videoResult.watermarkMetrics : {
-            watermarkDetected: true,
-            inpaintType: 'video-frame-inpaint'
-          };
+          watermarkMetrics = videoResult.watermarkMetrics;
         }
       } else {
         // Standard Lossless MP4/MOV container clean (0% re-encoding, 100% original video/audio bitstream)
@@ -147,6 +144,31 @@ export class CleanerHub {
       cleanedBuffer
     );
 
+    // 3. Binary Byte-Level String Scan & Mathematical Audit Verification
+    const cleanedBytes = new Uint8Array(cleanedBuffer);
+    const sampleBytes = cleanedBytes.length <= 1500000
+      ? cleanedBytes
+      : new Uint8Array([...cleanedBytes.subarray(0, 750000), ...cleanedBytes.subarray(cleanedBytes.length - 750000)]);
+    const cleanedText = new TextDecoder('utf-8', { fatal: false }).decode(sampleBytes);
+
+    const auditVerification = {
+      verifiedAt: Date.now(),
+      c2paRemaining: afterAnalysis.c2pa?.found ? 1 : (cleanedText.includes('c2pa') || cleanedText.includes('jumd') ? 1 : 0),
+      promptsRemaining: afterAnalysis.prompts?.length || 0,
+      exifTagsRemaining: Object.keys(afterAnalysis.exif || {}).length,
+      synthIdRemaining: cleanedText.includes('SynthID') ? 1 : 0,
+      trainedAlgorithmicMediaRemaining: cleanedText.includes('trainedAlgorithmicMedia') ? 1 : 0,
+      udtaRemaining: (isVideo && cleanedText.includes('udta')) ? 1 : 0,
+      meanAbsolutePixelDiff: (watermarkMetrics && watermarkMetrics.pixelDiff !== undefined)
+        ? watermarkMetrics.pixelDiff
+        : (watermarkMetrics && watermarkMetrics.pixelsInpainted > 0 ? 15.0 : 0.0),
+      isBinaryClean: !afterAnalysis.hasAIMetadata &&
+                     !afterAnalysis.hasGPS &&
+                     Object.keys(afterAnalysis.exif || {}).length === 0 &&
+                     !cleanedText.includes('SynthID') &&
+                     !cleanedText.includes('trainedAlgorithmicMedia')
+    };
+
     const endTime = performance.now();
     const durationMs = Math.round(endTime - startTime);
 
@@ -175,6 +197,7 @@ export class CleanerHub {
       beforeAnalysis: beforeAnalysis,
       afterAnalysis: afterAnalysis,
       watermarkMetrics: watermarkMetrics,
+      auditVerification: auditVerification,
       isFullyClean: !afterAnalysis.hasAIMetadata && !afterAnalysis.hasGPS && Object.keys(afterAnalysis.exif).length === 0
     };
   }

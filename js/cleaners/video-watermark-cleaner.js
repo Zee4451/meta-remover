@@ -339,29 +339,81 @@ export class VideoWatermarkCleaner {
 
           if (options.customBoxes && options.customBoxes.length > 0) {
             hasWatermark = true;
-            // Precompute LUT for each custom bounding box
+            const pad = 8;
+            // Precompute LUT for each custom bounding box with an 8px clean border ring
             for (const box of options.customBoxes) {
               const bx = Math.max(0, Math.round(box.x * width));
               const by = Math.max(0, Math.round(box.y * height));
-              const bw = Math.max(16, Math.min(width - bx, Math.round(box.w * width)));
-              const bh = Math.max(16, Math.min(height - by, Math.round(box.h * height)));
-              const boxMask = new Uint8Array(bw * bh);
-              boxMask.fill(1); // Default full inpaint inside user-specified box
-              const boxLUT = compileInpaintLUT(boxMask, bw, bh, 6);
+              const bw = Math.max(8, Math.min(width - bx, Math.round(box.w * width)));
+              const bh = Math.max(8, Math.min(height - by, Math.round(box.h * height)));
+
+              const extX = Math.max(0, bx - pad);
+              const extY = Math.max(0, by - pad);
+              const extW = Math.min(width - extX, bw + pad * 2);
+              const extH = Math.min(height - extY, bh + pad * 2);
+
+              const innerStartX = bx - extX;
+              const innerStartY = by - extY;
+              const innerEndX = Math.min(extW, innerStartX + bw);
+              const innerEndY = Math.min(extH, innerStartY + bh);
+
+              // 100% of inner box pixels are marked as mask = 1
+              // The 8px border ring remains 0 (clean reference pixels)
+              const boxMask = new Uint8Array(extW * extH);
+              for (let y = innerStartY; y < innerEndY; y++) {
+                for (let x = innerStartX; x < innerEndX; x++) {
+                  boxMask[y * extW + x] = 1;
+                }
+              }
+
+              const boxLUT = compileInpaintLUT(boxMask, extW, extH, 8);
               compiledBoxes.push({
-                roi: { x: bx, y: by, w: bw, h: bh },
+                roi: { x: extX, y: extY, w: extW, h: extH },
                 lut: boxLUT,
                 startTime: box.startTime ?? 0,
                 endTime: box.endTime ?? Infinity
               });
             }
 
+            // Extract real before/after thumbnails and mathematical pixel diff from sample frame
+            const targetB = compiledBoxes[0];
+            const sampleTime = Math.min(0.5, Math.max(0.1, targetB.startTime || 0.1));
+            await new Promise((r) => {
+              const onSeek = () => {
+                video.removeEventListener('seeked', onSeek);
+                r();
+              };
+              video.addEventListener('seeked', onSeek);
+              video.currentTime = Math.min(duration * 0.5, sampleTime);
+              setTimeout(onSeek, 200);
+            });
+
+            ctx.drawImage(video, 0, 0, width, height);
+            const bDataBefore = ctx.getImageData(targetB.roi.x, targetB.roi.y, targetB.roi.w, targetB.roi.h);
+            const beforeThumb = WatermarkRemover.createThumbnailFromData(bDataBefore, targetB.roi.w, targetB.roi.h);
+            const beforeBytes = new Uint8ClampedArray(bDataBefore.data);
+
+            const bDataAfter = ctx.getImageData(targetB.roi.x, targetB.roi.y, targetB.roi.w, targetB.roi.h);
+            executeInpaintLUT(bDataAfter.data, targetB.lut);
+            const afterThumb = WatermarkRemover.createThumbnailFromData(bDataAfter, targetB.roi.w, targetB.roi.h);
+
+            let totalDiff = 0;
+            const numPixels = targetB.roi.w * targetB.roi.h;
+            for (let i = 0; i < beforeBytes.length; i += 4) {
+              const dr = Math.abs(beforeBytes[i] - bDataAfter.data[i]);
+              const dg = Math.abs(beforeBytes[i + 1] - bDataAfter.data[i + 1]);
+              const db = Math.abs(beforeBytes[i + 2] - bDataAfter.data[i + 2]);
+              totalDiff += (dr + dg + db) / 3;
+            }
+            const meanPixelDiff = numPixels > 0 ? (totalDiff / numPixels) : 0;
+
             firstFrameMetrics = {
               watermarkDetected: true,
               pixelsInpainted: compiledBoxes.reduce((acc, b) => acc + b.lut.count, 0),
-              roi: compiledBoxes[0].roi,
-              beforeThumbnail: '',
-              afterThumbnail: ''
+              pixelDiff: meanPixelDiff,
+              roi: targetB.roi,
+              beforeThumbnail: beforeThumb,
+              afterThumbnail: afterThumb
             };
           } else {
             // Multi-Frame Temporal Persistence Sampling
@@ -434,16 +486,28 @@ export class VideoWatermarkCleaner {
             if (effectiveWatermarkMask && sampleCornerData) {
               hasWatermark = true;
               const beforeThumb = WatermarkRemover.createThumbnailFromData(sampleCornerData, roi.w, roi.h);
-              const dilatedMask = WatermarkRemover.dilateMask(effectiveWatermarkMask, roi.w, roi.h, 3);
-              cornerLUT = compileInpaintLUT(dilatedMask, roi.w, roi.h, 7);
+              const beforeBytes = new Uint8ClampedArray(sampleCornerData.data);
+              const dilatedMask = WatermarkRemover.dilateMask(effectiveWatermarkMask, roi.w, roi.h, 4);
+              cornerLUT = compileInpaintLUT(dilatedMask, roi.w, roi.h, 8);
 
               // Quick snapshot of healed corner
               executeInpaintLUT(sampleCornerData.data, cornerLUT);
               const afterThumb = WatermarkRemover.createThumbnailFromData(sampleCornerData, roi.w, roi.h);
 
+              let totalDiff = 0;
+              const numPixels = roi.w * roi.h;
+              for (let i = 0; i < beforeBytes.length; i += 4) {
+                const dr = Math.abs(beforeBytes[i] - sampleCornerData.data[i]);
+                const dg = Math.abs(beforeBytes[i + 1] - sampleCornerData.data[i + 1]);
+                const db = Math.abs(beforeBytes[i + 2] - sampleCornerData.data[i + 2]);
+                totalDiff += (dr + dg + db) / 3;
+              }
+              const meanPixelDiff = numPixels > 0 ? (totalDiff / numPixels) : 0;
+
               firstFrameMetrics = {
                 watermarkDetected: true,
                 pixelsInpainted: cornerLUT.count,
+                pixelDiff: meanPixelDiff,
                 roi,
                 beforeThumbnail: beforeThumb,
                 afterThumbnail: afterThumb

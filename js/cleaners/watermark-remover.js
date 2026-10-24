@@ -26,7 +26,7 @@ export class WatermarkRemover {
       customROI = null,
       customBoxes = null,
       currentTime = 0,
-      dilationRadius = 3,
+      dilationRadius = 4,
       noiseMatching = true,
       sensitivity = 1.0,
       temporalContext = null // Optional temporal accumulator for video frame sequences
@@ -41,13 +41,27 @@ export class WatermarkRemover {
       const bw = Math.max(16, Math.min(width - bx, Math.round(targetBox.w * width)));
       const bh = Math.max(16, Math.min(height - by, Math.round(targetBox.h * height)));
 
-      const beforeThumbnail = this.createThumbnailFromData(ctx.getImageData(bx, by, bw, bh), bw, bh);
+      const beforeImgData = ctx.getImageData(bx, by, bw, bh);
+      const beforeThumbnail = this.createThumbnailFromData(beforeImgData, bw, bh);
+      const beforeDataCopy = new Uint8ClampedArray(beforeImgData.data);
       const pixelsHealed = healSelectedBoxes(ctx, width, height, customBoxes, currentTime);
-      const afterThumbnail = this.createThumbnailFromData(ctx.getImageData(bx, by, bw, bh), bw, bh);
+      const afterImgData = ctx.getImageData(bx, by, bw, bh);
+      const afterThumbnail = this.createThumbnailFromData(afterImgData, bw, bh);
+
+      let totalDiff = 0;
+      const numPixels = bw * bh;
+      for (let i = 0; i < beforeDataCopy.length; i += 4) {
+        const dr = Math.abs(beforeDataCopy[i] - afterImgData.data[i]);
+        const dg = Math.abs(beforeDataCopy[i + 1] - afterImgData.data[i + 1]);
+        const db = Math.abs(beforeDataCopy[i + 2] - afterImgData.data[i + 2]);
+        totalDiff += (dr + dg + db) / 3;
+      }
+      const meanPixelDiff = numPixels > 0 ? (totalDiff / numPixels) : 0;
 
       return {
         watermarkDetected: true,
         pixelsInpainted: pixelsHealed,
+        pixelDiff: meanPixelDiff,
         boxesInpainted: customBoxes.length,
         customBoxes,
         roi: { x: bx, y: by, w: bw, h: bh },
@@ -59,12 +73,13 @@ export class WatermarkRemover {
     // 2. Default Automated Gemini Sparkle Detection in Corner ROI
     const roi = this.getROI(width, height, corner, customROI);
     if (roi.w <= 4 || roi.h <= 4) {
-      return { watermarkDetected: false, pixelsInpainted: 0, roi };
+      return { watermarkDetected: false, pixelsInpainted: 0, pixelDiff: 0, roi };
     }
 
     // Extract ONLY the corner ROI pixels (Leaving 99% of canvas untouched!)
     const cornerImageData = ctx.getImageData(roi.x, roi.y, roi.w, roi.h);
     const data = cornerImageData.data;
+    const beforeDataCopy = new Uint8ClampedArray(data);
     const cw = roi.w;
     const ch = roi.h;
 
@@ -100,18 +115,19 @@ export class WatermarkRemover {
       }
     }
 
-    if ((!hasWatermark && effectiveCount < 10) || effectiveCount < 8) {
+    if ((!hasWatermark && effectiveCount < 8) || effectiveCount < 6) {
       // Zero false positives: if no authentic watermark signature is found, touch 0 pixels!
       return {
         watermarkDetected: false,
         pixelsInpainted: 0,
+        pixelDiff: 0,
         roi,
         beforeThumbnail,
         afterThumbnail: beforeThumbnail
       };
     }
 
-    // 3. Morphological Dilation (3px radius default)
+    // 3. Morphological Dilation (4px radius default)
     // Completely captures anti-aliasing edge halos and translucent boundary fringes
     const dilatedMask = this.dilateMask(effectiveMask, cw, ch, dilationRadius);
 
@@ -129,9 +145,20 @@ export class WatermarkRemover {
 
     const afterThumbnail = this.createThumbnailFromData(cornerImageData, cw, ch);
 
+    let totalDiff = 0;
+    const numPixels = cw * ch;
+    for (let i = 0; i < beforeDataCopy.length; i += 4) {
+      const dr = Math.abs(beforeDataCopy[i] - cornerImageData.data[i]);
+      const dg = Math.abs(beforeDataCopy[i + 1] - cornerImageData.data[i + 1]);
+      const db = Math.abs(beforeDataCopy[i + 2] - cornerImageData.data[i + 2]);
+      totalDiff += (dr + dg + db) / 3;
+    }
+    const meanPixelDiff = numPixels > 0 ? (totalDiff / numPixels) : 0;
+
     return {
       watermarkDetected: true,
       pixelsInpainted: count,
+      pixelDiff: meanPixelDiff,
       dilatedPixels: dilatedMask.filter(v => v === 1).length,
       roi,
       beforeThumbnail,
@@ -148,7 +175,7 @@ export class WatermarkRemover {
     const {
       corner = 'bottom-right',
       customROI = null,
-      dilationRadius = 3,
+      dilationRadius = 4,
       noiseMatching = true,
       sensitivity = 1.0
     } = options;
@@ -163,10 +190,11 @@ export class WatermarkRemover {
       const dstOffset = y * roi.w * 4;
       cornerBuffer.set(fullData.subarray(srcOffset, srcOffset + roi.w * 4), dstOffset);
     }
+    const beforeCorner = new Uint8ClampedArray(cornerBuffer);
 
     const { mask, count, hasWatermark } = this.detectWatermarkMask(cornerBuffer, roi.w, roi.h, sensitivity);
-    if (!hasWatermark || count < 10) {
-      return { watermarkDetected: false, pixelsInpainted: 0, roi };
+    if (!hasWatermark || count < 8) {
+      return { watermarkDetected: false, pixelsInpainted: 0, pixelDiff: 0, roi };
     }
 
     const dilatedMask = this.dilateMask(mask, roi.w, roi.h, dilationRadius);
@@ -182,9 +210,20 @@ export class WatermarkRemover {
       fullData.set(cornerBuffer.subarray(srcOffset, srcOffset + roi.w * 4), dstOffset);
     }
 
+    let totalDiff = 0;
+    const numPixels = roi.w * roi.h;
+    for (let i = 0; i < beforeCorner.length; i += 4) {
+      const dr = Math.abs(beforeCorner[i] - cornerBuffer[i]);
+      const dg = Math.abs(beforeCorner[i + 1] - cornerBuffer[i + 1]);
+      const db = Math.abs(beforeCorner[i + 2] - cornerBuffer[i + 2]);
+      totalDiff += (dr + dg + db) / 3;
+    }
+    const meanPixelDiff = numPixels > 0 ? (totalDiff / numPixels) : 0;
+
     return {
       watermarkDetected: true,
       pixelsInpainted: count,
+      pixelDiff: meanPixelDiff,
       roi
     };
   }
@@ -249,7 +288,7 @@ export class WatermarkRemover {
     // Sampling at radius ensures the watermark's own bright star core never bleeds into background lum!
     const rad = Math.min(24, Math.max(12, Math.round(Math.min(w, h) * 0.08)));
     const d = Math.round(rad * 0.707);
-    const threshDelta = 11 / Math.max(0.5, sensitivity);
+    const threshDelta = 7 / Math.max(0.5, sensitivity);
     let count = 0;
 
     for (let y = 2; y < h - 2; y++) {
@@ -282,10 +321,12 @@ export class WatermarkRemover {
         const delta = l - bg;
 
         // Gemini sparkle & badge watermark characteristics:
-        // - Bright highlight relative to local perimeter background (delta > threshDelta, low chroma saturation, luminance > 85)
-        // - Or specular star core (l > 140 with low chroma saturation and positive delta)
-        const isBrightDeviation = delta > threshDelta && s < 62 && l > 85;
-        const isSpecularCore = l > 140 && s < 45 && delta > 6;
+        // - Bright/translucent highlight relative to local perimeter background (delta > threshDelta, low chroma, luminance > 55)
+        // - Or contrast edge deviation (Math.abs(delta) > threshDelta * 1.3, low chroma, luminance > 40)
+        // - Or specular star core (l > 120 with low chroma saturation and positive delta)
+        const isBrightDeviation = (delta > threshDelta && s < 68 && l > 55) ||
+                                  (Math.abs(delta) > threshDelta * 1.3 && s < 50 && l > 40);
+        const isSpecularCore = (l > 120 && s < 50 && delta > 4) || (l > 185 && s < 55);
 
         if (isBrightDeviation || isSpecularCore) {
           mask[idx] = 1;
@@ -294,7 +335,7 @@ export class WatermarkRemover {
       }
     }
 
-    if (count < 10) {
+    if (count < 8) {
       return { mask, count: 0, hasWatermark: false };
     }
 
@@ -398,7 +439,7 @@ export class WatermarkRemover {
       }
     }
 
-    const minPixels = 8;
+    const minPixels = 6;
     const maxPixels = Math.floor(totalPixels * 0.35);
     const hasWatermark = filteredCount >= minPixels && filteredCount <= maxPixels;
 
@@ -408,7 +449,7 @@ export class WatermarkRemover {
   /**
    * Morphological Dilation (expands mask outward by radius to swallow halo fringes)
    */
-  static dilateMask(mask, w, h, radius = 3) {
+  static dilateMask(mask, w, h, radius = 4) {
     const dilated = new Uint8Array(mask.length);
     const rSq = radius * radius;
 

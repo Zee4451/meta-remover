@@ -328,7 +328,34 @@ async function runBinaryUnitTests() {
   }
   assert(outsideChanged === 0, 'Strict Zero Full-Frame Loss: 100% of pixels outside target ROI remain bit-for-bit untouched');
 
-  // 9. Video Zero Re-Encoding & Dynamic Bitrate Inpainting Specs
+  // Verify 100% inner box erasure: all 400 pixels inside (70..89, 70..89) are modified and match clean 128 background
+  let innerDiffSum = 0;
+  for (let y = 70; y < 90; y++) {
+    for (let x = 70; x < 90; x++) {
+      const idx = (y * testW2 + x) * 4;
+      const dr = Math.abs(buffer[idx] - originalCopy[idx]);
+      const dg = Math.abs(buffer[idx + 1] - originalCopy[idx + 1]);
+      const db = Math.abs(buffer[idx + 2] - originalCopy[idx + 2]);
+      innerDiffSum += (dr + dg + db) / 3;
+      assert(buffer[idx] < 180, `Custom Box Pixel (${x},${y}) obliterated from white to clean background (${buffer[idx]})`);
+      assert(Math.abs(buffer[idx] - 128) < 18, `Custom Box Pixel (${x},${y}) matches background within 18 LSB`);
+    }
+  }
+  const meanInnerDiff = innerDiffSum / 400;
+  assert(meanInnerDiff > 90, `100% Inner Box Erasure: meanAbsolutePixelDiff = ${meanInnerDiff.toFixed(2)} / 255 (Watermark 100% obliterated)`);
+
+  // Verify Custom Box LUT compilation with 8px perimeter ring
+  const pad = 8;
+  const cbW = 20, cbH = 20;
+  const extW = cbW + pad * 2, extH = cbH + pad * 2;
+  const cbMask = new Uint8Array(extW * extH);
+  for (let y = pad; y < pad + cbH; y++) {
+    for (let x = pad; x < pad + cbW; x++) {
+      cbMask[y * extW + x] = 1;
+    }
+  }
+  const cbLUT = compileInpaintLUT(cbMask, extW, extH, 8);
+  assert(cbLUT.count === cbW * cbH, `Custom Box LUT compiles 100% of inner pixels into execution schedule (${cbLUT.count} === ${cbW * cbH})`);
   console.log('\n[9/9] Testing Video Bitstream Preservation & Dynamic Bitrate Scaling...');
   
   // 20.8 MB video of 5.0s duration
@@ -411,6 +438,27 @@ async function runBinaryUnitTests() {
 
   const centerPixelR = lutPixelData[(40 * lutTestW + 40) * 4];
   assert(centerPixelR < 80, `executeInpaintLUT healed white watermark center to background level (${centerPixelR})`);
+
+  // 11. Real test_video.mp4 Binary Cleaning & Provenance Audit
+  console.log('\n[11/11] Testing Real test_video.mp4 Binary Cleaning & Provenance Audit...');
+  const testVideoBuf = fs.readFileSync('test_video.mp4');
+  assert(Buffer.from(testVideoBuf).includes(Buffer.from('udta')), 'Pre-clean test_video.mp4 contains raw "udta" metadata box');
+
+  const testVideoFile = new File([new Uint8Array(testVideoBuf)], 'test_video.mp4', { type: 'video/mp4' });
+  const testVideoResult = await CleanerHub.processFile(testVideoFile, { scrubMode: 'lossless' });
+
+  const cleanedVideoBytes = new Uint8Array(await testVideoResult.cleanedBlob.arrayBuffer());
+  const cleanedVideoBuf = Buffer.from(cleanedVideoBytes);
+  const cleanedVideoStr = cleanedVideoBuf.toString('latin1');
+
+  assert(cleanedVideoBytes.length === testVideoBuf.length, 'Cleaned test_video.mp4 preserves exact byte length to prevent demuxer desync');
+  assert(!cleanedVideoStr.includes('udta'), 'Cleaned test_video.mp4: "udta" metadata box 100% neutralized');
+  assert(!cleanedVideoStr.includes('c2pa'), 'Cleaned test_video.mp4: "c2pa" 100% absent');
+  assert(!cleanedVideoStr.includes('SynthID'), 'Cleaned test_video.mp4: "SynthID" 100% absent');
+  assert(cleanedVideoStr.includes('free'), 'Cleaned test_video.mp4: metadata box replaced in-place with standard "free" atom');
+  assert(testVideoResult.auditVerification.udtaRemaining === 0, 'Audit verification confirms 0 udta atoms remaining');
+  assert(testVideoResult.auditVerification.c2paRemaining === 0, 'Audit verification confirms 0 C2PA remaining');
+  assert(testVideoResult.auditVerification.isBinaryClean === true, 'Audit verification confirms isBinaryClean === true');
 }
 
 async function runBrowserPlaywrightTests() {
@@ -673,10 +721,15 @@ async function runBrowserPlaywrightTests() {
 
   // Apply boxes to video file
   await page.click('#applyRoiBtn');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(600);
 
   const customRoiBadge = videoCard.locator('.badge-roi-custom');
   assert(await customRoiBadge.count() === 1, 'File card displays custom ROI badge after saving boxes');
+
+  // Verify Download button is visible and bound after Apply & Save Boxes
+  const cardDownloadBtn = videoCard.locator('button[id^="downloadBtn-"]');
+  await cardDownloadBtn.waitFor({ state: 'visible', timeout: 5000 });
+  assert(await cardDownloadBtn.isVisible(), 'File card download button immediately ready after Apply & Save Boxes re-clean');
 
   // Clear queue
   await page.click('#clearQueueBtn');

@@ -1152,15 +1152,27 @@ class App {
             </tr>
             <tr>
               <td>C2PA Manifests</td>
-              <td>${isProcessed ? '<span class="badge-radar-clean">Stripped ✓</span>' : 'Pending'}</td>
+              <td>${isProcessed 
+                ? (item.result?.afterAnalysis?.c2pa?.found 
+                    ? '<span class="badge-ai-threat badge-threat-high">Remaining</span>' 
+                    : '<span class="badge-radar-clean">Stripped ✓</span>') 
+                : 'Pending'}</td>
             </tr>
             <tr>
               <td>Prompts & Workflows</td>
-              <td>${isProcessed ? '<span class="badge-radar-clean">Stripped ✓</span>' : 'Pending'}</td>
+              <td>${isProcessed 
+                ? (item.result?.afterAnalysis?.prompts?.length > 0 
+                    ? `<span class="badge-ai-threat badge-threat-high">${item.result.afterAnalysis.prompts.length} remaining</span>` 
+                    : '<span class="badge-radar-clean">Stripped ✓</span>') 
+                : 'Pending'}</td>
             </tr>
             <tr>
               <td>EXIF / GPS Tags</td>
-              <td>${isProcessed ? '<span class="badge-radar-clean">Stripped ✓</span>' : 'Pending'}</td>
+              <td>${isProcessed 
+                ? (item.result?.afterAnalysis?.hasGPS || Object.keys(item.result?.afterAnalysis?.exif || {}).length > 0 
+                    ? '<span class="badge-ai-threat badge-threat-high">Tags Detected</span>' 
+                    : '<span class="badge-radar-clean">Stripped ✓</span>') 
+                : 'Pending'}</td>
             </tr>
             <tr>
               <td>Visible AI Watermark</td>
@@ -1232,10 +1244,18 @@ class App {
           <div class="comparison-title" style="color: var(--accent-emerald);">Post-Scrubbed State</div>
           <table class="meta-table">
             <tr><td>File Size</td><td>${isProcessed && item.result ? this.formatBytes(item.result.cleanedSize) : 'Pending'}</td></tr>
-            <tr><td>C2PA Manifest</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">CLEARED (0 B) ✓</strong>' : 'Pending'}</td></tr>
-            <tr><td>Prompts Found</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">0 (Erased) ✓</strong>' : 'Pending'}</td></tr>
-            <tr><td>Model Tags</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">0 (Erased) ✓</strong>' : 'Pending'}</td></tr>
-            <tr><td>GPS Coordinates</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">CLEARED ✓</strong>' : 'Pending'}</td></tr>
+            <tr><td>C2PA Manifest</td><td>${isProcessed 
+              ? (item.result?.afterAnalysis?.c2pa?.found ? '<strong style="color: #ef4444;">DETECTED IN OUTPUT</strong>' : '<strong style="color: var(--accent-emerald);">CLEARED (0 B) ✓</strong>') 
+              : 'Pending'}</td></tr>
+            <tr><td>Prompts Found</td><td>${isProcessed 
+              ? (item.result?.afterAnalysis?.prompts?.length > 0 ? `<strong style="color: #ef4444;">${item.result.afterAnalysis.prompts.length} REMAINING</strong>` : '<strong style="color: var(--accent-emerald);">0 (Erased) ✓</strong>') 
+              : 'Pending'}</td></tr>
+            <tr><td>Model Tags</td><td>${isProcessed 
+              ? (item.result?.afterAnalysis?.modelInfo?.length > 0 ? `<strong style="color: #ef4444;">${item.result.afterAnalysis.modelInfo.length} REMAINING</strong>` : '<strong style="color: var(--accent-emerald);">0 (Erased) ✓</strong>') 
+              : 'Pending'}</td></tr>
+            <tr><td>GPS Coordinates</td><td>${isProcessed 
+              ? (item.result?.afterAnalysis?.hasGPS ? '<strong style="color: #ef4444;">LEAKED</strong>' : '<strong style="color: var(--accent-emerald);">CLEARED ✓</strong>') 
+              : 'Pending'}</td></tr>
             <tr><td>Visible Watermark</td><td>${isProcessed ? (hasWatermarkInpainted || hasCustomBoxes ? '<strong style="color: var(--accent-emerald);">Inpainted & Grain-Matched ✓</strong>' : '<strong style="color: var(--accent-emerald);">Cleaned ✓</strong>') : 'Pending'}</td></tr>
           </table>
         </div>
@@ -1344,10 +1364,27 @@ class App {
       ]);
       const w = imgOrig.naturalWidth || 400;
       const h = imgOrig.naturalHeight || 400;
-      const roiW = Math.max(48, Math.round(w * 0.13));
-      const roiH = Math.max(48, Math.round(h * 0.13));
-      const roiX = w - roiW;
-      const roiY = h - roiH;
+
+      let roiX, roiY, roiW, roiH;
+      const targetBox = (item.customBoxes && item.customBoxes[0]) || (this.globalCustomBoxes && this.globalCustomBoxes[0]);
+      if (item.result?.watermarkMetrics?.roi) {
+        const r = item.result.watermarkMetrics.roi;
+        roiX = Math.max(0, Math.min(w - 16, r.x));
+        roiY = Math.max(0, Math.min(h - 16, r.y));
+        roiW = Math.max(16, Math.min(w - roiX, r.w));
+        roiH = Math.max(16, Math.min(h - roiY, r.h));
+      } else if (targetBox) {
+        roiX = Math.max(0, Math.round(targetBox.x * w));
+        roiY = Math.max(0, Math.round(targetBox.y * h));
+        roiW = Math.max(16, Math.min(w - roiX, Math.round(targetBox.w * w)));
+        roiH = Math.max(16, Math.min(h - roiY, Math.round(targetBox.h * h)));
+      } else {
+        const defaultRoi = WatermarkRemover.getROI(w, h, this.cornerPresetSelect?.value || 'bottom-right');
+        roiX = defaultRoi.x;
+        roiY = defaultRoi.y;
+        roiW = defaultRoi.w;
+        roiH = defaultRoi.h;
+      }
 
       const cOrig = document.createElement('canvas');
       cOrig.width = roiW;
@@ -1364,16 +1401,24 @@ class App {
       const d1 = ctxOrig.getImageData(0, 0, roiW, roiH).data;
       const d2 = ctxClean.getImageData(0, 0, roiW, roiH).data;
       let diffCount = 0;
+      let totalDiff = 0;
+      const totalPixels = roiW * roiH;
       for (let i = 0; i < d1.length; i += 4) {
-        if (Math.abs(d1[i] - d2[i]) > 8 || Math.abs(d1[i+1] - d2[i+1]) > 8 || Math.abs(d1[i+2] - d2[i+2]) > 8) {
+        const dr = Math.abs(d1[i] - d2[i]);
+        const dg = Math.abs(d1[i+1] - d2[i+1]);
+        const db = Math.abs(d1[i+2] - d2[i+2]);
+        totalDiff += (dr + dg + db) / 3;
+        if (dr > 8 || dg > 8 || db > 8) {
           diffCount++;
         }
       }
+      const meanPixelDiff = totalPixels > 0 ? (totalDiff / totalPixels) : 0;
 
       return {
         before: cOrig.toDataURL('image/png'),
         after: cClean.toDataURL('image/png'),
         pixelsInpainted: Math.max(diffCount, 84),
+        pixelDiff: meanPixelDiff,
         roi: { x: roiX, y: roiY, w: roiW, h: roiH }
       };
     } finally {
@@ -1392,10 +1437,27 @@ class App {
       ]);
       const w = vOrig.videoWidth || 1280;
       const h = vOrig.videoHeight || 720;
-      const roiW = Math.max(48, Math.round(w * 0.13));
-      const roiH = Math.max(48, Math.round(h * 0.13));
-      const roiX = w - roiW;
-      const roiY = h - roiH;
+
+      let roiX, roiY, roiW, roiH;
+      const targetBox = (item.customBoxes && item.customBoxes[0]) || (this.globalCustomBoxes && this.globalCustomBoxes[0]);
+      if (item.result?.watermarkMetrics?.roi) {
+        const r = item.result.watermarkMetrics.roi;
+        roiX = Math.max(0, Math.min(w - 16, r.x));
+        roiY = Math.max(0, Math.min(h - 16, r.y));
+        roiW = Math.max(16, Math.min(w - roiX, r.w));
+        roiH = Math.max(16, Math.min(h - roiY, r.h));
+      } else if (targetBox) {
+        roiX = Math.max(0, Math.round(targetBox.x * w));
+        roiY = Math.max(0, Math.round(targetBox.y * h));
+        roiW = Math.max(16, Math.min(w - roiX, Math.round(targetBox.w * w)));
+        roiH = Math.max(16, Math.min(h - roiY, Math.round(targetBox.h * h)));
+      } else {
+        const defaultRoi = WatermarkRemover.getROI(w, h, this.cornerPresetSelect?.value || 'bottom-right');
+        roiX = defaultRoi.x;
+        roiY = defaultRoi.y;
+        roiW = defaultRoi.w;
+        roiH = defaultRoi.h;
+      }
 
       const cOrig = document.createElement('canvas');
       cOrig.width = roiW;
@@ -1412,16 +1474,24 @@ class App {
       const d1 = ctxOrig.getImageData(0, 0, roiW, roiH).data;
       const d2 = ctxClean.getImageData(0, 0, roiW, roiH).data;
       let diffCount = 0;
+      let totalDiff = 0;
+      const totalPixels = roiW * roiH;
       for (let i = 0; i < d1.length; i += 4) {
-        if (Math.abs(d1[i] - d2[i]) > 8 || Math.abs(d1[i+1] - d2[i+1]) > 8 || Math.abs(d1[i+2] - d2[i+2]) > 8) {
+        const dr = Math.abs(d1[i] - d2[i]);
+        const dg = Math.abs(d1[i+1] - d2[i+1]);
+        const db = Math.abs(d1[i+2] - d2[i+2]);
+        totalDiff += (dr + dg + db) / 3;
+        if (dr > 8 || dg > 8 || db > 8) {
           diffCount++;
         }
       }
+      const meanPixelDiff = totalPixels > 0 ? (totalDiff / totalPixels) : 0;
 
       return {
         before: cOrig.toDataURL('image/png'),
         after: cClean.toDataURL('image/png'),
         pixelsInpainted: Math.max(diffCount, 120),
+        pixelDiff: meanPixelDiff,
         roi: { x: roiX, y: roiY, w: roiW, h: roiH }
       };
     } finally {
@@ -1598,19 +1668,21 @@ class App {
     }
   }
 
-  applyRoiBoxes() {
+  async applyRoiBoxes() {
     if (!this.activeRoiSelector) {
       this.closeRoiModal();
       return;
     }
 
     const boxes = this.activeRoiSelector.getBoxes();
-    if (this.activeRoiFileItem) {
-      this.activeRoiFileItem.customBoxes = boxes;
+    const targetItem = this.activeRoiFileItem;
+
+    if (targetItem) {
+      targetItem.customBoxes = boxes;
       // Update badge on item card
-      const badgeId = `roiBadge-${this.activeRoiFileItem.id}`;
+      const badgeId = `roiBadge-${targetItem.id}`;
       let badgeElem = document.getElementById(badgeId);
-      const tagsContainer = document.getElementById(`tags-${this.activeRoiFileItem.id}`);
+      const tagsContainer = document.getElementById(`tags-${targetItem.id}`);
 
       if (boxes.length > 0) {
         if (!badgeElem && tagsContainer) {
@@ -1626,7 +1698,7 @@ class App {
         badgeElem.remove();
       }
 
-      this.showToast(`Saved ${boxes.length} watermark box(es) for ${this.activeRoiFileItem.file.name}!`, 'success');
+      this.showToast(`Saved ${boxes.length} watermark box(es) for ${targetItem.file.name}! Inpainting with new boxes...`, 'info');
     } else {
       this.globalCustomBoxes = boxes;
       this.showToast(`Saved ${boxes.length} watermark box(es) as global default!`, 'success');
@@ -1638,9 +1710,15 @@ class App {
 
     this.closeRoiModal();
 
+    // Immediately re-process the target file with the updated custom boxes to regenerate cleanedBlob and update Download URLs
+    if (targetItem) {
+      targetItem.status = 'pending';
+      await this.processSingleItem(targetItem);
+    }
+
     // Synchronize Metadata Radar modal in real-time if currently open
-    if (this.inspectorModal && this.inspectorModal.classList.contains('open') && this.activeModalFile && this.activeModalFile.id === this.activeRoiFileItem?.id) {
-      this.openInspector(this.activeRoiFileItem);
+    if (this.inspectorModal && this.inspectorModal.classList.contains('open') && this.activeModalFile && this.activeModalFile.id === targetItem?.id) {
+      this.openInspector(targetItem);
     }
   }
 
