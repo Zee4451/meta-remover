@@ -1594,13 +1594,24 @@ progress::-moz-progress-bar {
 /* AI Visible Corner Watermark Removal UI */
 .corner-preset-group {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  margin-top: 6px;
+  margin-top: 8px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.corner-preset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  flex-wrap: wrap;
 }
 
 .corner-preset-label {
@@ -1610,6 +1621,7 @@ progress::-moz-progress-bar {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .form-select-corner {
@@ -1622,6 +1634,9 @@ progress::-moz-progress-bar {
   outline: none;
   cursor: pointer;
   transition: border-color 0.2s;
+  flex: 1 1 180px;
+  max-width: 100%;
+  min-width: 140px;
 }
 
 .form-select-corner:focus {
@@ -1979,17 +1994,21 @@ progress::-moz-progress-bar {
 }
 
 .btn-box-selector {
+  width: 100%;
+  justify-content: center;
   background: rgba(16, 185, 129, 0.12);
   border: 1px solid rgba(16, 185, 129, 0.35);
   color: #34d399;
   font-size: 0.82rem;
   font-weight: 600;
-  padding: 6px 14px;
+  padding: 8px 14px;
   border-radius: var(--radius-md);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  box-sizing: border-box;
   transition: all 0.2s ease;
 }
 

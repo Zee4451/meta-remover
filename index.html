@@ -243,15 +243,17 @@
             </div>
 
             <div class="corner-preset-group" id="cornerPresetGroup">
-              <label for="cornerPresetSelect" class="corner-preset-label">
-                <span>📍</span> Watermark Position:
-              </label>
-              <select id="cornerPresetSelect" class="form-select-corner" aria-label="Target Watermark Corner">
-                <option value="bottom-right" selected>Auto-Detect Bottom-Right (Gemini)</option>
-                <option value="bottom-left">Bottom-Left</option>
-                <option value="top-right">Top-Right</option>
-                <option value="custom">Custom Multi-Box / Moving Tracker</option>
-              </select>
+              <div class="corner-preset-row">
+                <label for="cornerPresetSelect" class="corner-preset-label">
+                  <span>📍</span> Watermark Position:
+                </label>
+                <select id="cornerPresetSelect" class="form-select-corner" aria-label="Target Watermark Corner">
+                  <option value="bottom-right" selected>Auto-Detect Bottom-Right (Gemini)</option>
+                  <option value="bottom-left">Bottom-Left</option>
+                  <option value="top-right">Top-Right</option>
+                  <option value="custom">Custom Multi-Box / Moving Tracker</option>
+                </select>
+              </div>
               <button type="button" class="btn-box-selector" id="openBoxSelectorBtn" title="Draw custom watermark boxes or setup video tracker">
                 <span>🎯</span> Draw / Edit Custom Boxes
               </button>
