@@ -337,7 +337,8 @@ export class WatermarkRemover {
             if (state[nIdx] === 0) {
               const distSq = dx * dx + dy * dy;
               if (distSq > maxRadius * maxRadius) continue;
-              const weight = 1.0 / (distSq + 0.1);
+              const dist = Math.sqrt(distSq);
+              const weight = 1.0 / (distSq * dist + 0.001); // Inverse cubic distance weight
 
               const p = nIdx * 4;
               sumR += data[p] * weight;
@@ -493,4 +494,161 @@ export class WatermarkRemover {
       return '';
     }
   }
+}
+
+/**
+ * 100% Client-Side Gemini / AI Bottom-Right Watermark Remover
+ * - Leaves 99% of the image bit-for-bit untouched (Zero Quality Loss)
+ * - Auto-detects bright/translucent sparkle watermarks in the bottom-right ROI
+ * - Uses Boundary-Inward Fast Marching (Telea-style) + Local Grain Matching
+ * 
+ * @param {CanvasRenderingContext2D} ctx 
+ * @param {number} width 
+ * @param {number} height 
+ * @param {Object} options 
+ * @returns {Object} { removed: boolean, pixelsHealed: number }
+ */
+export function removeGeminiCornerWatermark(ctx, width, height, options = {}) {
+  const {
+    roiWidthRatio = 0.13,   // Bottom-right 13% width
+    roiHeightRatio = 0.13,  // Bottom-right 13% height
+    sensitivity = 26,       // Luminance delta threshold for semi-transparent sparkle
+    dilateRadius = 3        // Captures anti-aliased watermark glow/edges
+  } = options;
+
+  const roiW = Math.max(48, Math.round(width * roiWidthRatio));
+  const roiH = Math.max(48, Math.round(height * roiHeightRatio));
+  const startX = width - roiW;
+  const startY = height - roiH;
+
+  // Sirf bottom-right ROI ke pixels extract karein (Baaki 99% image untouched rahegi!)
+  const roiImage = ctx.getImageData(startX, startY, roiW, roiH);
+  const data = roiImage.data;
+
+  // Step 1: Detect watermark mask inside ROI using local background estimation
+  const rawMask = new Uint8Array(roiW * roiH);
+  const win = 11; // Local neighborhood radius
+
+  for (let y = 4; y < roiH - 4; y++) {
+    for (let x = 4; x < roiW - 4; x++) {
+      const idx = (y * roiW + x) * 4;
+      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // Sample perimeter of local box to estimate underlying background luminance
+      let bgLumSum = 0, count = 0;
+      for (let dy = -win; dy <= win; dy += win) {
+        for (let dx = -win; dx <= win; dx += win) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = Math.min(roiW - 1, Math.max(0, x + dx));
+          const ny = Math.min(roiH - 1, Math.max(0, y + dy));
+          const nIdx = (ny * roiW + nx) * 4;
+          bgLumSum += 0.299 * data[nIdx] + 0.587 * data[nIdx + 1] + 0.114 * data[nIdx + 2];
+          count++;
+        }
+      }
+      const bgLum = bgLumSum / count;
+
+      // Gemini watermark is brighter than local background & low color saturation (white/silver sparkle)
+      const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+      const saturation = maxC === 0 ? 0 : (maxC - minC) / maxC;
+
+      if (lum - bgLum > sensitivity && saturation < 0.38 && lum > 115) {
+        rawMask[y * roiW + x] = 1;
+      }
+    }
+  }
+
+  // Step 2: Morphological Dilation (taaki watermark ki soft edges/glow bhi poori tarah cover ho)
+  const mask = new Uint8Array(roiW * roiH);
+  let maskedCount = 0;
+  for (let y = 0; y < roiH; y++) {
+    for (let x = 0; x < roiW; x++) {
+      let found = 0;
+      for (let dy = -dilateRadius; dy <= dilateRadius && !found; dy++) {
+        for (let dx = -dilateRadius; dx <= dilateRadius; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && nx < roiW && ny >= 0 && ny < roiH && rawMask[ny * roiW + nx]) {
+            found = 1;
+            break;
+          }
+        }
+      }
+      mask[y * roiW + x] = found;
+      if (found) maskedCount++;
+    }
+  }
+
+  // Agar koi watermark detect nahi hua, toh 100% untouched chhod dein
+  if (maskedCount === 0) return { removed: false, pixelsHealed: 0 };
+
+  // Step 3: Boundary-Inward Fast Marching Inpainting + Texture Grain Preservation
+  // Outer ring se andar ki taraf layer-by-layer heal karein
+  const workingMask = new Uint8Array(mask);
+  const searchRadius = 4;
+  let remaining = maskedCount;
+  let maxPasses = Math.max(roiW, roiH);
+
+  while (remaining > 0 && maxPasses-- > 0) {
+    const boundaryPixels = [];
+
+    // Find current boundary pixels (masked pixels touching at least 1 unmasked pixel)
+    for (let y = 1; y < roiH - 1; y++) {
+      for (let x = 1; x < roiW - 1; x++) {
+        const p = y * roiW + x;
+        if (workingMask[p] === 1) {
+          if (
+            workingMask[p - 1] === 0 ||
+            workingMask[p + 1] === 0 ||
+            workingMask[p - roiW] === 0 ||
+            workingMask[p + roiW] === 0
+          ) {
+            boundaryPixels.push([x, y]);
+          }
+        }
+      }
+    }
+
+    if (boundaryPixels.length === 0) break;
+
+    for (const [x, y] of boundaryPixels) {
+      let rSum = 0, gSum = 0, bSum = 0, weightSum = 0;
+
+      for (let dy = -searchRadius; dy <= searchRadius; dy++) {
+        for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && nx < roiW && ny >= 0 && ny < roiH) {
+            const np = ny * roiW + nx;
+            if (workingMask[np] === 0) {
+              const distSq = dx * dx + dy * dy;
+              const weight = 1 / (distSq * Math.sqrt(distSq)); // Inverse cubic distance weight
+              const nIdx = np * 4;
+              rSum += data[nIdx] * weight;
+              gSum += data[nIdx + 1] * weight;
+              bSum += data[nIdx + 2] * weight;
+              weightSum += weight;
+            }
+          }
+        }
+      }
+
+      if (weightSum > 0) {
+        const idx = (y * roiW + x) * 4;
+        // Subtle micro-grain matching so healed area blends naturally with photo noise
+        const grain = (Math.random() - 0.5) * 2.5;
+        data[idx]     = Math.min(255, Math.max(0, Math.round(rSum / weightSum + grain)));
+        data[idx + 1] = Math.min(255, Math.max(0, Math.round(gSum / weightSum + grain)));
+        data[idx + 2] = Math.min(255, Math.max(0, Math.round(bSum / weightSum + grain)));
+      }
+    }
+
+    for (const [x, y] of boundaryPixels) {
+      workingMask[y * roiW + x] = 0;
+      remaining--;
+    }
+  }
+
+  // Sirf healed ROI ko wapas canvas par put karein
+  ctx.putImageData(roiImage, startX, startY);
+  return { removed: true, pixelsHealed: maskedCount };
 }
