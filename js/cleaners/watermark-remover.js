@@ -191,6 +191,9 @@ export class WatermarkRemover {
 
   /**
    * Computes Region of Interest (ROI) box
+   * Dynamically adapts to video and image aspect ratio:
+   * Vertical/Portrait videos (9:16 reels/shorts) have inset watermarks (safe margins),
+   * while Landscape/Square frames place watermarks closer to outer corners.
    */
   static getROI(width, height, corner = 'bottom-right', customROI = null) {
     if (customROI && customROI.w && customROI.h) {
@@ -201,29 +204,29 @@ export class WatermarkRemover {
       return { x, y, w, h };
     }
 
-    // Default: Gemini sparkle watermark is positioned at bottom-right corner (approx outer 14% of dimensions)
-    const factor = 0.86;
+    const isPortrait = height > width;
+    const wRatio = isPortrait ? 0.28 : 0.20;
+    const hRatio = isPortrait ? 0.22 : 0.20;
+    const minDim = isPortrait ? 120 : 60;
+
+    const w = Math.max(minDim, Math.min(width, Math.round(width * wRatio)));
+    const h = Math.max(minDim, Math.min(height, Math.round(height * hRatio)));
+
     if (corner === 'bottom-left') {
-      const w = Math.max(24, Math.floor(width * 0.15));
-      const h = Math.max(24, Math.floor(height * 0.15));
       return { x: 0, y: height - h, w, h };
     } else if (corner === 'top-right') {
-      const w = Math.max(24, Math.floor(width * 0.15));
-      const h = Math.max(24, Math.floor(height * 0.15));
       return { x: width - w, y: 0, w, h };
+    } else if (corner === 'top-left') {
+      return { x: 0, y: 0, w, h };
     } else {
       // 'bottom-right' (Gemini, Imagen, Veo, DALL-E)
-      const x = Math.floor(width * factor);
-      const y = Math.floor(height * factor);
-      const w = width - x;
-      const h = height - y;
-      return { x, y, w, h };
+      return { x: width - w, y: height - h, w, h };
     }
   }
 
   /**
    * Adaptive Gemini Sparkle & Badge Mask Detection
-   * Analyzes local background luminance, chroma neutrality, and gradient prominence.
+   * Analyzes local background luminance via perimeter sampling, chroma neutrality, and specular core.
    */
   static detectWatermarkMask(data, w, h, sensitivity = 1.0) {
     const totalPixels = w * h;
@@ -242,27 +245,47 @@ export class WatermarkRemover {
       sat[i] = max - min; // Color saturation / chroma disparity
     }
 
-    // 2. Fast 2D local background luminance using separable box filter (radius 7, 15x15 window)
-    const bgLum = this.boxBlur(lum, w, h, 7);
-
+    // 2. Adaptive perimeter sampling for true local background estimation
+    // Sampling at radius ensures the watermark's own bright star core never bleeds into background lum!
+    const rad = Math.min(24, Math.max(12, Math.round(Math.min(w, h) * 0.08)));
+    const d = Math.round(rad * 0.707);
+    const threshDelta = 11 / Math.max(0.5, sensitivity);
     let count = 0;
-    const threshDelta = 16 / Math.max(0.5, sensitivity);
-    const highLumThresh = 210;
 
     for (let y = 2; y < h - 2; y++) {
+      const yT = Math.max(0, y - rad);
+      const yB = Math.min(h - 1, y + rad);
+      const yTd = Math.max(0, y - d);
+      const yBd = Math.min(h - 1, y + d);
+
       for (let x = 2; x < w - 2; x++) {
         const idx = y * w + x;
         const l = lum[idx];
         const s = sat[idx];
-        const bg = bgLum[idx];
+
+        const xL = Math.max(0, x - rad);
+        const xR = Math.min(w - 1, x + rad);
+        const xLd = Math.max(0, x - d);
+        const xRd = Math.min(w - 1, x + d);
+
+        const bg = (
+          lum[yT * w + x] +
+          lum[yB * w + x] +
+          lum[y * w + xL] +
+          lum[y * w + xR] +
+          lum[yTd * w + xLd] +
+          lum[yTd * w + xRd] +
+          lum[yBd * w + xLd] +
+          lum[yBd * w + xRd]
+        ) * 0.125; // / 8
+
         const delta = l - bg;
 
-        // Gemini sparkle watermark characteristics:
-        // - Bright highlight (delta > threshold)
-        // - Neutral white/translucent chroma (sat < 65)
-        // - Or extremely bright specular star core (l > 210 with low saturation)
-        const isBrightDeviation = delta > threshDelta && s < 70 && l > 120;
-        const isSpecularCore = l > highLumThresh && s < 45 && delta > 8;
+        // Gemini sparkle & badge watermark characteristics:
+        // - Bright highlight relative to local perimeter background (delta > threshDelta, low chroma saturation, luminance > 85)
+        // - Or specular star core (l > 140 with low chroma saturation and positive delta)
+        const isBrightDeviation = delta > threshDelta && s < 62 && l > 85;
+        const isSpecularCore = l > 140 && s < 45 && delta > 6;
 
         if (isBrightDeviation || isSpecularCore) {
           mask[idx] = 1;
@@ -272,8 +295,8 @@ export class WatermarkRemover {
     }
 
     // Check if detected pattern is an authentic watermark cluster or just uniform background
-    const minPixels = Math.max(12, Math.floor(totalPixels * 0.0015));
-    const maxPixels = Math.floor(totalPixels * 0.40); // Shouldn't take over whole corner
+    const minPixels = Math.max(12, Math.floor(totalPixels * 0.001));
+    const maxPixels = Math.floor(totalPixels * 0.35); // Shouldn't take over whole corner
 
     const hasWatermark = count >= minPixels && count <= maxPixels;
     return { mask, count, hasWatermark };
@@ -539,15 +562,20 @@ export class WatermarkRemover {
  * @returns {Object} { removed: boolean, pixelsHealed: number }
  */
 export function removeGeminiCornerWatermark(ctx, width, height, options = {}) {
+  const isPortrait = height > width;
+  const defaultWRatio = isPortrait ? 0.28 : 0.20;
+  const defaultHRatio = isPortrait ? 0.22 : 0.20;
+
   const {
-    roiWidthRatio = 0.13,   // Bottom-right 13% width
-    roiHeightRatio = 0.13,  // Bottom-right 13% height
-    sensitivity = 26,       // Luminance delta threshold for semi-transparent sparkle
-    dilateRadius = 3        // Captures anti-aliased watermark glow/edges
+    roiWidthRatio = defaultWRatio,
+    roiHeightRatio = defaultHRatio,
+    sensitivity = 11,
+    dilateRadius = 3
   } = options;
 
-  const roiW = Math.max(48, Math.round(width * roiWidthRatio));
-  const roiH = Math.max(48, Math.round(height * roiHeightRatio));
+  const minDim = isPortrait ? 120 : 60;
+  const roiW = Math.max(minDim, Math.round(width * roiWidthRatio));
+  const roiH = Math.max(minDim, Math.round(height * roiHeightRatio));
   const startX = width - roiW;
   const startY = height - roiH;
 

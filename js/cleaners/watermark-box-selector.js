@@ -66,12 +66,16 @@ export class WatermarkBoxSelector {
   }
 
   // Quick Corner Presets (Gemini, Veo, Pika, Runway, etc.)
-  addCornerPreset(corner = 'bottom-right', wRatio = 0.13, hRatio = 0.13) {
+  addCornerPreset(corner = 'bottom-right', wRatio = null, hRatio = null) {
+    const isPortrait = (this.media?.videoHeight || this.media?.naturalHeight || 0) > (this.media?.videoWidth || this.media?.naturalWidth || 0);
+    const effWRatio = wRatio !== null ? wRatio : (isPortrait ? 0.28 : 0.20);
+    const effHRatio = hRatio !== null ? hRatio : (isPortrait ? 0.22 : 0.20);
+
     const presets = {
-      'bottom-right': { x: 1 - wRatio - 0.01, y: 1 - hRatio - 0.01, w: wRatio, h: hRatio },
-      'bottom-left':  { x: 0.01,              y: 1 - hRatio - 0.01, w: wRatio, h: hRatio },
-      'top-right':    { x: 1 - wRatio - 0.01, y: 0.01,              w: wRatio, h: hRatio },
-      'top-left':     { x: 0.01,              y: 0.01,              w: wRatio, h: hRatio },
+      'bottom-right': { x: Math.max(0, 1 - effWRatio - 0.01), y: Math.max(0, 1 - effHRatio - 0.01), w: effWRatio, h: effHRatio },
+      'bottom-left':  { x: 0.01,                              y: Math.max(0, 1 - effHRatio - 0.01), w: effWRatio, h: effHRatio },
+      'top-right':    { x: Math.max(0, 1 - effWRatio - 0.01), y: 0.01,                              w: effWRatio, h: effHRatio },
+      'top-left':     { x: 0.01,                              y: 0.01,                              w: effWRatio, h: effHRatio },
     };
     const box = presets[corner] || presets['bottom-right'];
     const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'box_' + Math.random().toString(36).substring(2, 9);

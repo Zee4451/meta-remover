@@ -4,10 +4,10 @@
  * sample creation, theme toggling, and the metadata inspector modal.
  */
 
-import { CleanerHub } from './cleaners/cleaner-hub.js?v=13';
-import { SampleGenerator } from './utils/samples.js?v=13';
-import { AIDetector } from './detectors/ai-detector.js?v=13';
-import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=13';
+import { CleanerHub } from './cleaners/cleaner-hub.js?v=15';
+import { SampleGenerator } from './utils/samples.js?v=15';
+import { AIDetector } from './detectors/ai-detector.js?v=15';
+import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=15';
 
 class App {
   constructor() {
@@ -760,7 +760,7 @@ class App {
       onProgress(100, 'Cleaning Complete');
       if (!isBatch) {
         this.showProgress(100, `Cleaned ${item.file.name}!`);
-        this.hideProgress(1000);
+        this.hideProgress(400);
       }
 
       if (card) card.classList.add('cleaned');
@@ -1724,7 +1724,7 @@ class App {
       setTimeout(() => {
         track.classList.remove('active');
         fill.style.width = '0%';
-      }, 500);
+      }, 300);
     } else {
       track.classList.remove('active');
       fill.style.width = '0%';
