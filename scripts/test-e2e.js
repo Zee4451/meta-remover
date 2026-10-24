@@ -15,7 +15,7 @@ import { MP4Cleaner } from '../js/cleaners/mp4-cleaner.js';
 import { WebPCleaner } from '../js/cleaners/webp-cleaner.js';
 import { CleanerHub } from '../js/cleaners/cleaner-hub.js';
 import { WatermarkRemover, healSelectedBoxes } from '../js/cleaners/watermark-remover.js';
-import { getLosslessTargetBitrate } from '../js/cleaners/video-watermark-cleaner.js';
+import { getLosslessTargetBitrate, getRealtimeVideoBitrate, compileInpaintLUT, executeInpaintLUT } from '../js/cleaners/video-watermark-cleaner.js';
 
 let passedChecks = 0;
 let totalChecks = 0;
@@ -356,6 +356,61 @@ async function runBinaryUnitTests() {
   });
   assert(losslessCleanResult.cleaningMethod === 'lossless', 'CleanerHub routes lossless video to pure container clean without re-encoding');
   assert(losslessCleanResult.cleanedSize === mp4FileObj.size, `Lossless container clean preserved 100% exact byte size (${losslessCleanResult.cleanedSize} === ${mp4FileObj.size})`);
+
+  // 10. Zero-Stutter Precomputed Inpaint LUT (< 0.8ms/frame) & Real-Time Bitrate Specs
+  console.log('\n[10/10] Testing Zero-Stutter Precomputed Inpaint LUT & Hardware Bitrate...');
+  
+  // Real-time Bitrate clamping (8 Mbps to 18 Mbps)
+  const rtBitrate20MB = getRealtimeVideoBitrate(20.8 * 1024 * 1024, 5.0);
+  assert(rtBitrate20MB >= 8_000_000 && rtBitrate20MB <= 18_000_000, `getRealtimeVideoBitrate clamps within 8-18 Mbps range (${(rtBitrate20MB / 1_000_000).toFixed(2)} Mbps)`);
+  
+  const rtBitrateSmall = getRealtimeVideoBitrate(100 * 1024, 10.0);
+  assert(rtBitrateSmall === 8_000_000, 'getRealtimeVideoBitrate respects 8 Mbps floor for small videos');
+  
+  const rtBitrateMassive = getRealtimeVideoBitrate(500 * 1024 * 1024, 5.0);
+  assert(rtBitrateMassive === 18_000_000, 'getRealtimeVideoBitrate enforces 18 Mbps ceiling to prevent encoder buffer stalls');
+
+  // Precomputed LUT Performance & Correctness
+  const lutTestW = 80;
+  const lutTestH = 80;
+  const lutMask = new Uint8Array(lutTestW * lutTestH);
+  // Circle mask in center
+  for (let y = 30; y <= 50; y++) {
+    for (let x = 30; x <= 50; x++) {
+      const d = Math.hypot(x - 40, y - 40);
+      if (d <= 7) {
+        lutMask[y * lutTestW + x] = 1;
+      }
+    }
+  }
+
+  const lut = compileInpaintLUT(lutMask, lutTestW, lutTestH, 6);
+  assert(lut.count > 0, `compileInpaintLUT compiled ${lut.count} target pixels into flat schedule`);
+  assert(lut.flatWeights.length > 0, `compileInpaintLUT calculated ${lut.flatWeights.length} precomputed neighbor weights`);
+
+  const lutPixelData = new Uint8ClampedArray(lutTestW * lutTestH * 4);
+  lutPixelData.fill(50); // Background gray
+  // Watermark pixels bright white
+  for (let i = 0; i < lutMask.length; i++) {
+    if (lutMask[i] === 1) {
+      lutPixelData[i * 4] = 255;
+      lutPixelData[i * 4 + 1] = 255;
+      lutPixelData[i * 4 + 2] = 255;
+      lutPixelData[i * 4 + 3] = 255;
+    }
+  }
+
+  // Benchmark executeInpaintLUT over 100 frames
+  const t0 = performance.now();
+  for (let frame = 0; frame < 100; frame++) {
+    executeInpaintLUT(lutPixelData, lut);
+  }
+  const t1 = performance.now();
+  const avgFrameTimeMs = (t1 - t0) / 100;
+  assert(avgFrameTimeMs < 0.8, `executeInpaintLUT runs in < 0.8ms per frame (Measured: ${avgFrameTimeMs.toFixed(4)}ms per frame)`);
+
+  const centerPixelR = lutPixelData[(40 * lutTestW + 40) * 4];
+  assert(centerPixelR < 80, `executeInpaintLUT healed white watermark center to background level (${centerPixelR})`);
 }
 
 async function runBrowserPlaywrightTests() {
