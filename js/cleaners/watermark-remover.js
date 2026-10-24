@@ -294,12 +294,115 @@ export class WatermarkRemover {
       }
     }
 
-    // Check if detected pattern is an authentic watermark cluster or just uniform background
-    const minPixels = Math.max(12, Math.floor(totalPixels * 0.001));
-    const maxPixels = Math.floor(totalPixels * 0.35); // Shouldn't take over whole corner
+    if (count < 10) {
+      return { mask, count: 0, hasWatermark: false };
+    }
 
-    const hasWatermark = count >= minPixels && count <= maxPixels;
-    return { mask, count, hasWatermark };
+    // 3. Connected Component Analysis & Watermark Cluster Isolation
+    // Discards sprawling background edges, shadows, and clothing folds (spanning > 55% of ROI)
+    const visited = new Uint8Array(totalPixels);
+    const components = [];
+    const maxSpanW = Math.round(w * 0.55);
+    const maxSpanH = Math.round(h * 0.55);
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = y * w + x;
+        if (mask[idx] === 1 && visited[idx] === 0) {
+          const comp = { pixels: [], minX: x, maxX: x, minY: y, maxY: y };
+          const queue = [idx];
+          visited[idx] = 1;
+
+          while (queue.length > 0) {
+            const curr = queue.pop();
+            comp.pixels.push(curr);
+            const cy = Math.floor(curr / w);
+            const cx = curr % w;
+            comp.minX = Math.min(comp.minX, cx);
+            comp.maxX = Math.max(comp.maxX, cx);
+            comp.minY = Math.min(comp.minY, cy);
+            comp.maxY = Math.max(comp.maxY, cy);
+
+            if (cx > 0 && mask[curr - 1] === 1 && visited[curr - 1] === 0) {
+              visited[curr - 1] = 1; queue.push(curr - 1);
+            }
+            if (cx < w - 1 && mask[curr + 1] === 1 && visited[curr + 1] === 0) {
+              visited[curr + 1] = 1; queue.push(curr + 1);
+            }
+            if (cy > 0 && mask[curr - w] === 1 && visited[curr - w] === 0) {
+              visited[curr - w] = 1; queue.push(curr - w);
+            }
+            if (cy < h - 1 && mask[curr + w] === 1 && visited[curr + w] === 0) {
+              visited[curr + w] = 1; queue.push(curr + w);
+            }
+          }
+          components.push(comp);
+        }
+      }
+    }
+
+    const validWatermarks = [];
+    for (const c of components) {
+      const bw = c.maxX - c.minX + 1;
+      const bh = c.maxY - c.minY + 1;
+      const size = c.pixels.length;
+
+      // Discard small noise specks and huge sprawling edges
+      if (size < 8 || size > 3000) continue;
+      if (bw > maxSpanW || bh > maxSpanH) continue; // Sprawls across >55% of ROI is an object/edge!
+
+      let peakLum = 0;
+      let neutralCount = 0;
+      for (const pIdx of c.pixels) {
+        const p = pIdx * 4;
+        const r = data[p], g = data[p + 1], b = data[p + 2];
+        const l = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (l > peakLum) peakLum = l;
+        if (Math.max(r, g, b) - Math.min(r, g, b) < 55) neutralCount++;
+      }
+
+      const neutrality = neutralCount / size;
+      if (neutrality < 0.5) continue;
+
+      const ar = Math.min(bw, bh) / Math.max(bw, bh);
+      const touchesBorder = (c.minX <= 2 || c.maxX >= w - 3 || c.minY <= 2 || c.maxY >= h - 3);
+
+      let score = size;
+      if (ar > 0.45) score *= 2.0;
+      if (!touchesBorder) score *= 1.8;
+      if (peakLum > 160) score *= 1.5;
+
+      validWatermarks.push({ comp: c, score, bw, bh });
+    }
+
+    validWatermarks.sort((a, b) => b.score - a.score);
+
+    const filteredMask = new Uint8Array(totalPixels);
+    let filteredCount = 0;
+
+    // Retain only authentic watermark cluster(s)
+    if (validWatermarks.length > 0) {
+      const top = validWatermarks[0];
+      for (const pIdx of top.comp.pixels) {
+        filteredMask[pIdx] = 1;
+        filteredCount++;
+      }
+      for (let i = 1; i < Math.min(3, validWatermarks.length); i++) {
+        const second = validWatermarks[i];
+        if (second.score >= top.score * 0.45) {
+          for (const pIdx of second.comp.pixels) {
+            filteredMask[pIdx] = 1;
+            filteredCount++;
+          }
+        }
+      }
+    }
+
+    const minPixels = 8;
+    const maxPixels = Math.floor(totalPixels * 0.35);
+    const hasWatermark = filteredCount >= minPixels && filteredCount <= maxPixels;
+
+    return { mask: filteredMask, count: filteredCount, hasWatermark };
   }
 
   /**

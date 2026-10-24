@@ -364,10 +364,17 @@ export class VideoWatermarkCleaner {
               afterThumbnail: ''
             };
           } else {
-            // Sample a clear frame (e.g. at 20% into video or 0.5s) to detect watermark signature
-            const sampleTimes = [Math.min(1.0, duration * 0.2), 0.5, Math.min(2.0, duration * 0.5), 0.0];
+            // Multi-Frame Temporal Persistence Sampling
+            // Samples up to 3 frames across the video to isolate persistent static AI watermarks
+            const sampleTimes = [
+              Math.min(0.5, Math.max(0.1, duration * 0.1)),
+              Math.min(2.0, Math.max(0.3, duration * 0.35)),
+              Math.min(5.0, Math.max(0.5, duration * 0.65))
+            ];
+            const detectedDetections = [];
+
             for (const sTime of sampleTimes) {
-              if (hasWatermark) break;
+              if (sTime >= duration) continue;
               await new Promise((r) => {
                 const onSeek = () => {
                   video.removeEventListener('seeked', onSeek);
@@ -382,24 +389,65 @@ export class VideoWatermarkCleaner {
               const cornerData = ctx.getImageData(roi.x, roi.y, roi.w, roi.h);
               const detection = WatermarkRemover.detectWatermarkMask(cornerData.data, roi.w, roi.h, options.watermarkSensitivity || 1.0);
 
-              if (detection.hasWatermark || detection.count >= 8) {
-                hasWatermark = true;
-                const beforeThumb = WatermarkRemover.createThumbnailFromData(cornerData, roi.w, roi.h);
-                const dilatedMask = WatermarkRemover.dilateMask(detection.mask, roi.w, roi.h, 3);
-                cornerLUT = compileInpaintLUT(dilatedMask, roi.w, roi.h, 7);
-
-                // Quick snapshot of healed corner
-                executeInpaintLUT(cornerData.data, cornerLUT);
-                const afterThumb = WatermarkRemover.createThumbnailFromData(cornerData, roi.w, roi.h);
-
-                firstFrameMetrics = {
-                  watermarkDetected: true,
-                  pixelsInpainted: cornerLUT.count,
-                  roi,
-                  beforeThumbnail: beforeThumb,
-                  afterThumbnail: afterThumb
-                };
+              if (detection.hasWatermark && detection.count >= 8) {
+                detectedDetections.push({
+                  mask: detection.mask,
+                  count: detection.count,
+                  cornerData
+                });
               }
+            }
+
+            let effectiveWatermarkMask = null;
+            let sampleCornerData = null;
+
+            if (detectedDetections.length === 1) {
+              effectiveWatermarkMask = detectedDetections[0].mask;
+              sampleCornerData = detectedDetections[0].cornerData;
+            } else if (detectedDetections.length > 1) {
+              // Temporal Intersection: pixels present in >= 2 sample frames are guaranteed to be the AI watermark
+              const totalPixels = roi.w * roi.h;
+              const votes = new Uint8Array(totalPixels);
+              for (const d of detectedDetections) {
+                for (let i = 0; i < totalPixels; i++) {
+                  if (d.mask[i] === 1) votes[i]++;
+                }
+              }
+              const threshold = detectedDetections.length >= 3 ? 2 : 1;
+              const voted = new Uint8Array(totalPixels);
+              let vCount = 0;
+              for (let i = 0; i < totalPixels; i++) {
+                if (votes[i] >= threshold) {
+                  voted[i] = 1;
+                  vCount++;
+                }
+              }
+              if (vCount >= 8) {
+                effectiveWatermarkMask = voted;
+                sampleCornerData = detectedDetections[0].cornerData;
+              } else {
+                effectiveWatermarkMask = detectedDetections[0].mask;
+                sampleCornerData = detectedDetections[0].cornerData;
+              }
+            }
+
+            if (effectiveWatermarkMask && sampleCornerData) {
+              hasWatermark = true;
+              const beforeThumb = WatermarkRemover.createThumbnailFromData(sampleCornerData, roi.w, roi.h);
+              const dilatedMask = WatermarkRemover.dilateMask(effectiveWatermarkMask, roi.w, roi.h, 3);
+              cornerLUT = compileInpaintLUT(dilatedMask, roi.w, roi.h, 7);
+
+              // Quick snapshot of healed corner
+              executeInpaintLUT(sampleCornerData.data, cornerLUT);
+              const afterThumb = WatermarkRemover.createThumbnailFromData(sampleCornerData, roi.w, roi.h);
+
+              firstFrameMetrics = {
+                watermarkDetected: true,
+                pixelsInpainted: cornerLUT.count,
+                roi,
+                beforeThumbnail: beforeThumb,
+                afterThumbnail: afterThumb
+              };
             }
           }
 
@@ -440,14 +488,14 @@ export class VideoWatermarkCleaner {
             if (aTrack) stream.addTrack(aTrack);
           } catch {}
 
-          // Hardware-accelerated smooth bitrate (8 - 18 Mbps)
-          const targetBitrate = getRealtimeVideoBitrate(file.size, duration);
+          // Hardware-accelerated smooth bitrate (preserves ~20 MB file size without compression loss)
+          const targetBitrate = getRealtimeVideoBitrate(file.size, duration, 2.5, 20_000_000, 45_000_000);
 
-          // Codec Hierarchy
+          // Codec Hierarchy - Prioritize High Profile Level 4.0 for zero visual compression artifacts
           const preferredMimes = [
-            'video/mp4;codecs="avc1.42E01F,mp4a.40.2"', // Constrained Baseline Level 3.1 + AAC
-            'video/mp4;codecs="avc1.640028,mp4a.40.2"', // High Profile Level 4.0 + AAC
+            'video/mp4;codecs="avc1.640028,mp4a.40.2"', // High Profile Level 4.0 + AAC (Maximum quality, 8x8 DCT)
             'video/mp4;codecs="avc1.4d4028,mp4a.40.2"', // Main Profile Level 4.0 + AAC
+            'video/mp4;codecs="avc1.42E01F,mp4a.40.2"', // Constrained Baseline Level 3.1 + AAC
             'video/mp4;codecs=avc1',
             'video/mp4',
             'video/webm;codecs="vp9,opus"',

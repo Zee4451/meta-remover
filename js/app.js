@@ -4,10 +4,10 @@
  * sample creation, theme toggling, and the metadata inspector modal.
  */
 
-import { CleanerHub } from './cleaners/cleaner-hub.js?v=15';
-import { SampleGenerator } from './utils/samples.js?v=15';
-import { AIDetector } from './detectors/ai-detector.js?v=15';
-import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=15';
+import { CleanerHub } from './cleaners/cleaner-hub.js?v=16';
+import { SampleGenerator } from './utils/samples.js?v=16';
+import { AIDetector } from './detectors/ai-detector.js?v=16';
+import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=16';
 
 class App {
   constructor() {
