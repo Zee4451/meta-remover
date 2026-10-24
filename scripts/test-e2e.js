@@ -5,6 +5,8 @@
 
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
+import { spawn } from 'child_process';
 import { chromium } from 'playwright';
 import { AIDetector } from '../js/detectors/ai-detector.js';
 import { PNGCleaner } from '../js/cleaners/png-cleaner.js';
@@ -505,9 +507,41 @@ async function runBrowserPlaywrightTests() {
   await browser.close();
 }
 
+function pingServer(url) {
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      resolve(res.statusCode < 500);
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(1000, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+async function ensureServerRunning() {
+  const isUp = await pingServer('http://localhost:3000');
+  if (isUp) return null;
+
+  console.log('Local server not detected on http://localhost:3000. Spawning server.js...');
+  const serverProc = spawn('node', ['server.js'], { stdio: 'ignore' });
+
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 200));
+    if (await pingServer('http://localhost:3000')) {
+      console.log('✅ Local server successfully started on http://localhost:3000');
+      return serverProc;
+    }
+  }
+  throw new Error('Timed out waiting for server.js to start on http://localhost:3000');
+}
+
 async function main() {
+  let serverProcess = null;
   try {
     await runBinaryUnitTests();
+    serverProcess = await ensureServerRunning();
     await runBrowserPlaywrightTests();
 
     console.log('\n======================================================');
@@ -517,6 +551,10 @@ async function main() {
   } catch (err) {
     console.error('\n❌ Test execution failed:', err);
     process.exit(1);
+  } finally {
+    if (serverProcess) {
+      serverProcess.kill();
+    }
   }
 }
 
