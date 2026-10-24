@@ -57,7 +57,8 @@ export class CleanerHub {
           removeWatermark: true,
           corner: options.corner || 'bottom-right',
           customROI: options.customROI || null,
-          customBoxes: options.customBoxes || null
+          customBoxes: options.customBoxes || null,
+          onProgress: options.onProgress || null
         });
 
         cleanedBlob = (videoResult && videoResult.blob) ? videoResult.blob : videoResult;

@@ -59,6 +59,7 @@ class App {
     // Progress bar
     this.progressWrapper = document.getElementById('progressWrapper');
     this.progressBar = document.getElementById('progressBar');
+    this.progressBarFill = document.getElementById('progressBarFill');
     this.progressText = document.getElementById('progressText');
     this.progressPercent = document.getElementById('progressPercent');
     this.liveStatus = document.getElementById('liveStatus');
@@ -633,6 +634,10 @@ class App {
           </svg>
         </button>
       </div>
+      <!-- Embedded Live Card Progress Track -->
+      <div class="card-progress-track" id="cardProgressTrack-${item.id}">
+        <div class="card-progress-fill" id="cardProgressFill-${item.id}"></div>
+      </div>
     `;
 
     this.queueList.prepend(card);
@@ -702,9 +707,9 @@ class App {
   }
 
   /**
-   * Process a single queue item
+   * Process a single queue item with live progress tracking
    */
-  async processSingleItem(item) {
+  async processSingleItem(item, isBatch = false, progressCallback = null) {
     const card = document.getElementById(`card-${item.id}`);
     const cleanBtn = document.getElementById(`cleanBtn-${item.id}`);
     const downloadBtn = document.getElementById(`downloadBtn-${item.id}`);
@@ -713,7 +718,21 @@ class App {
     const isVideo = item.file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(item.file.name);
 
     if (cleanBtn) cleanBtn.disabled = true;
-    if (badge) badge.textContent = 'Stripping...';
+
+    // Helper to broadcast progress to global card and per-item card
+    const onProgress = (pct, msg) => {
+      const clamped = Math.min(100, Math.max(0, Math.round(pct)));
+      if (progressCallback) {
+        progressCallback(clamped, msg);
+      } else {
+        if (!isBatch) {
+          this.showProgress(clamped, `Cleaning ${item.file.name}: ${msg || 'Inpainting...'}`);
+        }
+        this.updateCardProgress(item.id, clamped, msg || 'Inpainting...');
+      }
+    };
+
+    onProgress(12, isVideo ? 'Inspecting video container...' : 'Analyzing file headers...');
 
     try {
       const customBoxes = (item.customBoxes && item.customBoxes.length > 0)
@@ -728,12 +747,21 @@ class App {
         stripGPS: this.toggleGPS.checked,
         removeWatermark: this.toggleWatermark ? this.toggleWatermark.checked : true,
         corner: customBoxes ? 'custom' : (this.cornerPresetSelect ? this.cornerPresetSelect.value : 'bottom-right'),
-        customBoxes: customBoxes
+        customBoxes: customBoxes,
+        onProgress: onProgress
       };
+
+      onProgress(isVideo ? 18 : 35, isVideo ? 'Initializing zero-loss audio & video streams...' : 'Detecting & inpainting watermark...');
 
       const result = await CleanerHub.processFile(item.file, options);
       item.result = result;
       item.status = 'done';
+
+      onProgress(100, 'Cleaning Complete');
+      if (!isBatch) {
+        this.showProgress(100, `Cleaned ${item.file.name}!`);
+        this.hideProgress(1000);
+      }
 
       if (card) card.classList.add('cleaned');
       if (cleanBtn) cleanBtn.style.display = 'none';
@@ -809,6 +837,15 @@ class App {
     } catch (err) {
       console.error(err);
       item.status = 'error';
+      if (progressCallback) {
+        progressCallback(0, 'Error');
+      } else {
+        this.updateCardProgress(item.id, 0);
+        if (!isBatch) {
+          this.hideProgress(600);
+        }
+      }
+      if (cleanBtn) cleanBtn.disabled = false;
       if (badge) {
         badge.className = 'badge-ai-threat badge-threat-high';
         badge.textContent = 'Error Cleaning';
@@ -818,7 +855,7 @@ class App {
   }
 
   /**
-   * Process all pending items in the queue
+   * Process all pending items in the queue with smooth overall and sub-item progress
    */
   async processAllPending() {
     const pendingItems = this.queue.filter(q => q.status === 'pending');
@@ -827,24 +864,28 @@ class App {
       return;
     }
 
-    this.progressWrapper.style.display = 'block';
+    this.showProgress(0, `Processing queue (0/${pendingItems.length})...`);
     this.cleanAllBtn.disabled = true;
 
     for (let i = 0; i < pendingItems.length; i++) {
       const item = pendingItems[i];
-      const percent = Math.round(((i + 1) / pendingItems.length) * 100);
-      this.progressBar.value = percent;
-      this.progressPercent.textContent = `${percent}%`;
-      this.progressText.textContent = `Cleaning ${item.file.name} (${i + 1}/${pendingItems.length})...`;
-      this.liveStatus.textContent = this.progressText.textContent;
+      const basePct = Math.round((i / pendingItems.length) * 100);
+      const itemWeight = 100 / pendingItems.length;
 
-      await this.processSingleItem(item);
+      this.showProgress(basePct, `Cleaning ${item.file.name} (${i + 1}/${pendingItems.length})...`);
+
+      const itemProgressCallback = (subPct, msg) => {
+        const overall = Math.min(99, Math.round(basePct + (subPct / 100) * itemWeight));
+        this.showProgress(overall, `[${i + 1}/${pendingItems.length}] ${item.file.name}: ${msg || 'Cleaning...'}`);
+        this.updateCardProgress(item.id, subPct, msg || 'Cleaning...');
+      };
+
+      await this.processSingleItem(item, true, itemProgressCallback);
     }
 
-    this.progressText.textContent = 'All files processed successfully!';
-    this.liveStatus.textContent = 'All files processed successfully!';
+    this.showProgress(100, 'All files processed successfully!');
     setTimeout(() => {
-      this.progressWrapper.style.display = 'none';
+      this.hideProgress(0);
       this.cleanAllBtn.disabled = false;
     }, 1200);
 
@@ -1572,6 +1613,62 @@ class App {
     if (!this.roiBoxesSummary) return;
     const count = boxes ? boxes.length : 0;
     this.roiBoxesSummary.textContent = `${count} active box${count === 1 ? '' : 'es'}`;
+  }
+
+  /**
+   * Show global progress bar with percentage, fill, and status text
+   */
+  showProgress(percent, text) {
+    if (!this.progressWrapper) return;
+    this.progressWrapper.style.display = 'block';
+    const clamped = Math.min(100, Math.max(0, Math.round(percent)));
+    if (this.progressBar) this.progressBar.value = clamped;
+    if (this.progressBarFill) this.progressBarFill.style.width = `${clamped}%`;
+    if (this.progressPercent) this.progressPercent.textContent = `${clamped}%`;
+    if (text) {
+      if (this.progressText) this.progressText.textContent = text;
+      if (this.liveStatus) this.liveStatus.textContent = text;
+    }
+  }
+
+  /**
+   * Hide global progress bar smoothly
+   */
+  hideProgress(delayMs = 800) {
+    setTimeout(() => {
+      if (this.progressWrapper) this.progressWrapper.style.display = 'none';
+      if (this.progressBar) this.progressBar.value = 0;
+      if (this.progressBarFill) this.progressBarFill.style.width = '0%';
+      if (this.progressPercent) this.progressPercent.textContent = '0%';
+    }, delayMs);
+  }
+
+  /**
+   * Update per-card embedded progress track
+   */
+  updateCardProgress(itemId, percent, statusText = null) {
+    const track = document.getElementById(`cardProgressTrack-${itemId}`);
+    const fill = document.getElementById(`cardProgressFill-${itemId}`);
+    const badge = document.getElementById(`badge-${itemId}`);
+    if (!track || !fill) return;
+
+    if (percent > 0 && percent < 100) {
+      track.classList.add('active');
+      fill.style.width = `${Math.min(100, Math.max(2, percent))}%`;
+      if (statusText && badge) {
+        badge.className = 'badge-ai-threat badge-threat-processing';
+        badge.innerHTML = `<span class="spinner-inline"></span>${this.escapeHtml(statusText)}`;
+      }
+    } else if (percent >= 100) {
+      fill.style.width = '100%';
+      setTimeout(() => {
+        track.classList.remove('active');
+        fill.style.width = '0%';
+      }, 500);
+    } else {
+      track.classList.remove('active');
+      fill.style.width = '0%';
+    }
   }
 
   showToast(message, type = 'info') {

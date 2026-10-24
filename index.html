@@ -263,13 +263,19 @@
       </section>
 
       <!-- Processing Progress & Status -->
-      <div id="progressWrapper" style="display: none; margin-bottom: 20px;">
-        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 8px;">
-          <span id="progressText">Processing queue...</span>
-          <span id="progressPercent">0%</span>
+      <div id="progressWrapper" class="global-progress-card" style="display: none; margin-bottom: 20px;">
+        <div class="progress-header">
+          <div class="progress-label-wrap">
+            <span class="progress-pulse-dot"></span>
+            <span id="progressText">Processing queue...</span>
+          </div>
+          <span id="progressPercent" class="progress-percentage">0%</span>
         </div>
-        <progress id="progressBar" value="0" max="100"></progress>
-        <div id="liveStatus" role="status" aria-live="polite" class="sr-only" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0);">Ready</div>
+        <div class="progress-bar-track">
+          <div id="progressBarFill" class="progress-bar-fill" style="width: 0%;"></div>
+        </div>
+        <progress id="progressBar" value="0" max="100" class="sr-only"></progress>
+        <div id="liveStatus" role="status" aria-live="polite" class="sr-only">Ready</div>
       </div>
 
       <!-- Action Bar (Queue stats & batch buttons) -->

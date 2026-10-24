@@ -207,6 +207,14 @@ export class VideoWatermarkCleaner {
               temporalContext
             });
 
+            // Report live frame inpainting progress
+            if (options.onProgress) {
+              const cur = video.currentTime || 0;
+              const dur = video.duration || 1;
+              const pct = Math.min(96, Math.max(8, Math.round((cur / dur) * 100)));
+              options.onProgress(pct, `Inpainting frame (${cur.toFixed(1)}s / ${dur.toFixed(1)}s)...`);
+            }
+
             if ('requestVideoFrameCallback' in video) {
               video.requestVideoFrameCallback(processFrame);
             } else {
@@ -215,10 +223,12 @@ export class VideoWatermarkCleaner {
           };
 
           video.onplay = () => {
+            if (options.onProgress) options.onProgress(10, 'Processing video frames...');
             processFrame();
           };
 
           video.onended = () => {
+            if (options.onProgress) options.onProgress(98, 'Finalizing video stream...');
             if (animId) cancelAnimationFrame(animId);
             setTimeout(() => {
               if (recorder.state !== 'inactive') recorder.stop();
