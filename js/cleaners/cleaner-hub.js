@@ -53,19 +53,22 @@ export class CleanerHub {
       } else if (removeWatermark || explicitInpaintRequested) {
         // High-Bitrate Frame-Accurate Video Watermark Inpainting (Dynamic 1.25x Bitrate)
         const containerBlob = new Blob([MP4Cleaner.clean(originalBuffer)], { type: file.type || 'video/mp4' });
-        cleanedBlob = await VideoWatermarkCleaner.clean(file, {
+        const videoResult = await VideoWatermarkCleaner.clean(file, {
           removeWatermark: true,
           corner: options.corner || 'bottom-right',
           customROI: options.customROI || null,
           customBoxes: options.customBoxes || null
         });
 
+        cleanedBlob = (videoResult && videoResult.blob) ? videoResult.blob : videoResult;
+
         // If VideoWatermarkCleaner detected no authentic watermark on frame 1, it fell back to container clean
         if (cleanedBlob.size === containerBlob.size) {
           cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
+          watermarkMetrics = null;
         } else {
           cleaningMethod = 'video-watermark-canvas';
-          watermarkMetrics = {
+          watermarkMetrics = (videoResult && videoResult.watermarkMetrics) ? videoResult.watermarkMetrics : {
             watermarkDetected: true,
             inpaintType: 'video-frame-inpaint'
           };

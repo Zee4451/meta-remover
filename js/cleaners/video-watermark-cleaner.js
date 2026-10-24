@@ -40,7 +40,7 @@ export class VideoWatermarkCleaner {
 
     // If visible watermark removal is not requested or running in headless/Node CLI without DOM:
     if (!options.removeWatermark || typeof document === 'undefined' || typeof MediaRecorder === 'undefined') {
-      return containerCleanedBlob;
+      return { blob: containerCleanedBlob, watermarkMetrics: null };
     }
 
     // 2. High-Bitrate Frame-Accurate Corner Inpainting
@@ -56,7 +56,7 @@ export class VideoWatermarkCleaner {
       // Timeout safeguard: if video fails to decode or play within 30s, fall back to container clean
       const safetyTimeout = setTimeout(() => {
         cleanup();
-        resolve(containerCleanedBlob);
+        resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
       }, 30000);
 
       function cleanup() {
@@ -86,29 +86,40 @@ export class VideoWatermarkCleaner {
           });
           if (!ctx) {
             cleanup();
-            return resolve(containerCleanedBlob);
+            return resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
           }
           ctx.imageSmoothingEnabled = false;
 
-          // Frame 1 Pre-Check: If no custom boxes were specified, inspect corner on first frame
-          // If no authentic watermark signature exists, NEVER re-encode! Return container clean immediately!
+          // Frame 1 Pre-Check & Comparison Metrics Snapshot
           let hasWatermark = false;
+          let firstFrameMetrics = null;
+
+          ctx.drawImage(video, 0, 0, width, height);
+
           if (options.customBoxes && options.customBoxes.length > 0) {
             hasWatermark = true;
+            firstFrameMetrics = WatermarkRemover.removeCornerWatermark(ctx, width, height, {
+              ...options,
+              currentTime: 0,
+              customBoxes: options.customBoxes
+            });
           } else {
-            ctx.drawImage(video, 0, 0, width, height);
             const roiW = Math.max(48, Math.round(width * 0.13));
             const roiH = Math.max(48, Math.round(height * 0.13));
             const cornerData = ctx.getImageData(width - roiW, height - roiH, roiW, roiH).data;
             const detection = WatermarkRemover.detectWatermarkMask(cornerData, roiW, roiH, options.watermarkSensitivity || 1.0);
             if (detection.hasWatermark || detection.count >= 10) {
               hasWatermark = true;
+              firstFrameMetrics = WatermarkRemover.removeCornerWatermark(ctx, width, height, {
+                ...options,
+                currentTime: 0
+              });
             }
           }
 
           if (!hasWatermark) {
             cleanup();
-            return resolve(containerCleanedBlob);
+            return resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
           }
 
           // Configure audio track preservation
@@ -163,9 +174,16 @@ export class VideoWatermarkCleaner {
             if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
             if (chunks.length > 0) {
               const cleanedVideoBlob = new Blob(chunks, { type: selectedMime });
-              resolve(cleanedVideoBlob);
+              resolve({
+                blob: cleanedVideoBlob,
+                watermarkMetrics: {
+                  ...firstFrameMetrics,
+                  watermarkDetected: true,
+                  inpaintType: 'video-frame-inpaint'
+                }
+              });
             } else {
-              resolve(containerCleanedBlob);
+              resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
             }
           };
 
@@ -210,17 +228,17 @@ export class VideoWatermarkCleaner {
           video.playbackRate = 1.0; // Normal 1x playback ensures full frame capture without dropped frames
           video.play().catch(() => {
             cleanup();
-            resolve(containerCleanedBlob);
+            resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
           });
         } catch {
           cleanup();
-          resolve(containerCleanedBlob);
+          resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
         }
       };
 
       video.onerror = () => {
         cleanup();
-        resolve(containerCleanedBlob);
+        resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
       };
     });
   }

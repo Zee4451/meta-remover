@@ -406,9 +406,9 @@ async function runBrowserPlaywrightTests() {
   assert(title.includes('GhostMeta AI'), `Page title is correct ("${title}")`);
 
   // 1. Cross-Platform Paste Shortcut Check
-  console.log('\n[Test 2] Verifying Cross-Platform Paste Shortcut...');
-  const pasteHintText = await page.textContent('#pasteHint');
-  assert(pasteHintText === 'Ctrl+V' || pasteHintText === '⌘+V', `Paste hint dynamically displayed as: ${pasteHintText}`);
+  const pasteKbdEl = page.locator('#pasteKbd');
+  const pasteHintText = (await pasteKbdEl.count() > 0) ? (await pasteKbdEl.textContent()) : (await page.textContent('#pasteHint'));
+  assert(pasteHintText.includes('Ctrl+V') || pasteHintText.includes('⌘+V'), `Paste hint dynamically displayed as: ${pasteHintText.trim()}`);
 
   // 2. Header Brand Link Smooth Scroll Check
   console.log('\n[Test 3] Verifying Header Brand Link Behavior...');
