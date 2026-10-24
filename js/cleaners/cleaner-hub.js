@@ -38,28 +38,41 @@ export class CleanerHub {
     const removeWatermark = !!options.removeWatermark;
 
     if (isVideo) {
-      if (removeWatermark) {
-        // High-Bitrate Frame-Accurate Video Watermark Inpainting
-        cleaningMethod = 'video-watermark-canvas';
+      // RULE 1: Pure Binary Container Scrub (100% Bitstream Preservation)
+      // If scrubMode is 'lossless' AND no explicit customBoxes were set for this video,
+      // strictly execute Pure Binary Container Scrubbing (MP4Cleaner) to guarantee
+      // 100% bit-for-bit identical video/audio bitstream preservation with ZERO re-encoding!
+      const explicitInpaintRequested = (options.customBoxes && options.customBoxes.length > 0) ||
+                                       (options.inpaintVideoWatermark === true);
+
+      if (options.scrubMode === 'lossless' && !explicitInpaintRequested) {
+        // Pure Lossless MP4/MOV container clean (0% re-encoding, 100% original video/audio bitstream)
+        cleaningMethod = 'lossless';
+        const cleanedBytes = MP4Cleaner.clean(originalBuffer);
+        cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
+      } else if (removeWatermark || explicitInpaintRequested) {
+        // High-Bitrate Frame-Accurate Video Watermark Inpainting (Dynamic 1.25x Bitrate)
+        const containerBlob = new Blob([MP4Cleaner.clean(originalBuffer)], { type: file.type || 'video/mp4' });
         cleanedBlob = await VideoWatermarkCleaner.clean(file, {
           removeWatermark: true,
           corner: options.corner || 'bottom-right',
           customROI: options.customROI || null,
           customBoxes: options.customBoxes || null
         });
-        watermarkMetrics = {
-          watermarkDetected: true,
-          inpaintType: 'video-frame-inpaint'
-        };
-      } else if (options.scrubMode === 'deep') {
-        // Video Graceful Fallback: Canvas 2D cannot re-encode multi-track video/audio streams.
-        // Fall back to lossless container clean to preserve playback & audio synchronization.
-        cleaningMethod = 'lossless-video-fallback';
-        const cleanedBytes = MP4Cleaner.clean(originalBuffer);
-        cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
+
+        // If VideoWatermarkCleaner detected no authentic watermark on frame 1, it fell back to container clean
+        if (cleanedBlob.size === containerBlob.size) {
+          cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
+        } else {
+          cleaningMethod = 'video-watermark-canvas';
+          watermarkMetrics = {
+            watermarkDetected: true,
+            inpaintType: 'video-frame-inpaint'
+          };
+        }
       } else {
         // Standard Lossless MP4/MOV container clean (0% re-encoding)
-        cleaningMethod = 'lossless';
+        cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
         const cleanedBytes = MP4Cleaner.clean(originalBuffer);
         cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
       }

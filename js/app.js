@@ -761,7 +761,16 @@ class App {
       }
 
       if (badge) {
-        if (result.cleaningMethod === 'lossless-video-fallback' || (isVideo && this.currentMode === 'deep')) {
+        if (result.cleaningMethod === 'video-watermark-canvas') {
+          badge.className = 'badge-ai-threat badge-threat-clean';
+          badge.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            Watermark Inpainted (High-Bitrate)
+          `;
+          badge.title = 'Visible corner watermark seamlessly inpainted at 1.25x high-bitrate quality';
+        } else if (result.cleaningMethod === 'lossless-video-fallback' || isVideo) {
           badge.className = 'badge-ai-threat badge-threat-clean';
           badge.innerHTML = `
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -769,7 +778,7 @@ class App {
             </svg>
             Lossless (Video Preserved)
           `;
-          badge.title = 'Video container stripped losslessly (Canvas deep scrub not applicable to multi-track video)';
+          badge.title = 'Video container stripped losslessly (100% bit-for-bit video and audio stream preserved)';
         } else {
           badge.className = 'badge-ai-threat badge-threat-clean';
           badge.innerHTML = `
@@ -783,9 +792,18 @@ class App {
       }
 
       if (diff) {
-        const pct = Math.round((result.sizeDiff / result.originalSize) * 100);
-        const savingsText = result.sizeDiff > 0 ? `(-${pct}% / ${this.formatBytes(result.sizeDiff)} removed)` : `(Clean)`;
-        diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} ${savingsText}</strong>`;
+        if (isVideo) {
+          if (result.cleaningMethod === 'lossless' || result.cleaningMethod === 'lossless-video-fallback') {
+            const strippedBytes = result.sizeDiff > 0 ? this.formatBytes(result.sizeDiff) : '0 B';
+            diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} (${strippedBytes} AI Metadata Wiped • 100% Original Video Bitstream Preserved)</strong>`;
+          } else {
+            diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} (Watermark Inpainted • High-Bitrate Quality Preserved)</strong>`;
+          }
+        } else {
+          const pct = Math.round((result.sizeDiff / result.originalSize) * 100);
+          const savingsText = result.sizeDiff > 0 ? `(-${pct}% / ${this.formatBytes(result.sizeDiff)} removed)` : `(Clean)`;
+          diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} ${savingsText}</strong>`;
+        }
       }
 
       this.updateActionBar();

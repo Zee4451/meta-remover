@@ -15,6 +15,7 @@ import { MP4Cleaner } from '../js/cleaners/mp4-cleaner.js';
 import { WebPCleaner } from '../js/cleaners/webp-cleaner.js';
 import { CleanerHub } from '../js/cleaners/cleaner-hub.js';
 import { WatermarkRemover, healSelectedBoxes } from '../js/cleaners/watermark-remover.js';
+import { getLosslessTargetBitrate } from '../js/cleaners/video-watermark-cleaner.js';
 
 let passedChecks = 0;
 let totalChecks = 0;
@@ -326,6 +327,35 @@ async function runBinaryUnitTests() {
     }
   }
   assert(outsideChanged === 0, 'Strict Zero Full-Frame Loss: 100% of pixels outside target ROI remain bit-for-bit untouched');
+
+  // 9. Video Zero Re-Encoding & Dynamic Bitrate Inpainting Specs
+  console.log('\n[9/9] Testing Video Bitstream Preservation & Dynamic Bitrate Scaling...');
+  
+  // 20.8 MB video of 5.0s duration
+  const testFileSize = 20.8 * 1024 * 1024;
+  const testDuration = 5.0;
+  const calculatedBitrate = getLosslessTargetBitrate(testFileSize, testDuration);
+  const rawSourceBitrate = (testFileSize * 8) / testDuration;
+  const expected125x = Math.round(rawSourceBitrate * 1.25);
+  
+  assert(calculatedBitrate === expected125x, `getLosslessTargetBitrate calculates exact 1.25x scaling (${calculatedBitrate} bps = ${(calculatedBitrate / 1_000_000).toFixed(2)} Mbps for 20.8 MB source)`);
+  assert(calculatedBitrate >= 30_000_000, `getLosslessTargetBitrate respects 30 Mbps minimum floor`);
+  
+  // Test floor and ceiling constraints
+  const lowBitrateSmallFile = getLosslessTargetBitrate(500 * 1024, 10.0);
+  assert(lowBitrateSmallFile === 30_000_000, 'getLosslessTargetBitrate enforces 30 Mbps minimum floor for small files');
+  
+  const highBitrate4KFile = getLosslessTargetBitrate(500 * 1024 * 1024, 5.0);
+  assert(highBitrate4KFile === 80_000_000, 'getLosslessTargetBitrate enforces 80 Mbps maximum ceiling');
+
+  // Verify pure container clean on MP4 video without custom boxes preserves 100% exact size
+  const losslessCleanResult = await CleanerHub.processFile(mp4FileObj, {
+    scrubMode: 'lossless',
+    removeWatermark: true,
+    customBoxes: []
+  });
+  assert(losslessCleanResult.cleaningMethod === 'lossless', 'CleanerHub routes lossless video to pure container clean without re-encoding');
+  assert(losslessCleanResult.cleanedSize === mp4FileObj.size, `Lossless container clean preserved 100% exact byte size (${losslessCleanResult.cleanedSize} === ${mp4FileObj.size})`);
 }
 
 async function runBrowserPlaywrightTests() {
