@@ -4,10 +4,10 @@
  * sample creation, theme toggling, and the metadata inspector modal.
  */
 
-import { CleanerHub } from './cleaners/cleaner-hub.js?v=12';
-import { SampleGenerator } from './utils/samples.js?v=12';
-import { AIDetector } from './detectors/ai-detector.js?v=12';
-import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=12';
+import { CleanerHub } from './cleaners/cleaner-hub.js?v=13';
+import { SampleGenerator } from './utils/samples.js?v=13';
+import { AIDetector } from './detectors/ai-detector.js?v=13';
+import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=13';
 
 class App {
   constructor() {
@@ -1655,10 +1655,25 @@ class App {
    */
   showProgress(percent, text) {
     if (!this.progressWrapper) return;
+    if (this._hideProgressTimer) {
+      clearTimeout(this._hideProgressTimer);
+      this._hideProgressTimer = null;
+    }
     this.progressWrapper.style.display = 'block';
     const clamped = Math.min(100, Math.max(0, Math.round(percent)));
     if (this.progressBar) this.progressBar.value = clamped;
-    if (this.progressBarFill) this.progressBarFill.style.width = `${clamped}%`;
+    const pulseDot = this.progressWrapper.querySelector('.progress-pulse-dot');
+
+    if (this.progressBarFill) {
+      this.progressBarFill.style.width = `${clamped}%`;
+      if (clamped >= 100) {
+        this.progressBarFill.classList.remove('active-shimmer');
+        if (pulseDot) pulseDot.classList.add('completed');
+      } else {
+        this.progressBarFill.classList.add('active-shimmer');
+        if (pulseDot) pulseDot.classList.remove('completed');
+      }
+    }
     if (this.progressPercent) this.progressPercent.textContent = `${clamped}%`;
     if (text) {
       if (this.progressText) this.progressText.textContent = text;
@@ -1669,12 +1684,22 @@ class App {
   /**
    * Hide global progress bar smoothly
    */
-  hideProgress(delayMs = 800) {
-    setTimeout(() => {
+  hideProgress(delayMs = 600) {
+    if (this._hideProgressTimer) {
+      clearTimeout(this._hideProgressTimer);
+    }
+    this._hideProgressTimer = setTimeout(() => {
       if (this.progressWrapper) this.progressWrapper.style.display = 'none';
       if (this.progressBar) this.progressBar.value = 0;
-      if (this.progressBarFill) this.progressBarFill.style.width = '0%';
+      if (this.progressBarFill) {
+        this.progressBarFill.classList.remove('active-shimmer');
+        this.progressBarFill.style.width = '0%';
+      }
       if (this.progressPercent) this.progressPercent.textContent = '0%';
+      if (this.progressText) this.progressText.textContent = '';
+      if (this.liveStatus) this.liveStatus.textContent = '';
+      const pulseDot = this.progressWrapper?.querySelector('.progress-pulse-dot');
+      if (pulseDot) pulseDot.classList.remove('completed');
     }, delayMs);
   }
 

@@ -2124,7 +2124,16 @@ progress::-moz-progress-bar {
   border-radius: 999px;
   transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
+}
+
+.progress-bar-fill.active-shimmer {
   animation: shimmerGradient 2s linear infinite;
+}
+
+.progress-pulse-dot.completed {
+  animation: none !important;
+  background: var(--accent-emerald, #10b981) !important;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.8) !important;
 }
 
 @keyframes shimmerGradient {

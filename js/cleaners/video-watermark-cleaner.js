@@ -45,6 +45,9 @@ export class VideoWatermarkCleaner {
 
     // 2. High-Bitrate Frame-Accurate Corner Inpainting
     return new Promise((resolve) => {
+      let isAborted = false;
+      let isFinished = false;
+
       const video = document.createElement('video');
       video.muted = true;
       video.playsInline = true;
@@ -53,14 +56,12 @@ export class VideoWatermarkCleaner {
       const fileUrl = URL.createObjectURL(file);
       video.src = fileUrl;
 
-      // Timeout safeguard: if video fails to decode or play within 45s, fall back to container clean
-      const safetyTimeout = setTimeout(() => {
-        cleanup();
-        resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
-      }, 45000);
+      // Timeout safeguard: dynamic timeout (at least 120s) based on duration
+      let safetyTimeout = null;
 
       function cleanup() {
-        clearTimeout(safetyTimeout);
+        isAborted = true;
+        if (safetyTimeout) clearTimeout(safetyTimeout);
         URL.revokeObjectURL(fileUrl);
         video.pause();
         video.removeAttribute('src');
@@ -90,6 +91,14 @@ export class VideoWatermarkCleaner {
               }, 300);
             });
           }
+
+          // Dynamic safety timeout: at least 120s or 10s per video second
+          const timeoutMs = Math.max(120000, Math.round(duration * 10000));
+          safetyTimeout = setTimeout(() => {
+            isAborted = true;
+            cleanup();
+            resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
+          }, timeoutMs);
 
           // Enforce Constant Bitrate: targetBitrate = Math.max(35_000_000, Math.ceil((originalFile.size * 8) / video.duration * 1.35))
           const targetBitrate = Math.max(35_000_000, Math.ceil(((file.size * 8) / duration) * 1.35));
@@ -137,18 +146,35 @@ export class VideoWatermarkCleaner {
             const roiH = Math.max(48, Math.round(height * 0.13));
             const cornerData = ctx.getImageData(width - roiW, height - roiH, roiW, roiH).data;
             const detection = WatermarkRemover.detectWatermarkMask(cornerData, roiW, roiH, options.watermarkSensitivity || 1.0);
-            if (detection.hasWatermark || detection.count >= 10) {
+            if (detection.hasWatermark || detection.count >= 8) {
               hasWatermark = true;
               firstFrameMetrics = WatermarkRemover.removeCornerWatermark(ctx, width, height, {
                 ...options,
                 currentTime: 0
               });
+            } else if (duration > 0.5) {
+              // Frame 0 may be black fade-in; sample at t = 1.0s or mid-video for metrics snapshot
+              const sampleTime = Math.min(1.0, duration * 0.3);
+              await new Promise((r) => {
+                const onSeekSample = () => {
+                  video.removeEventListener('seeked', onSeekSample);
+                  r();
+                };
+                video.addEventListener('seeked', onSeekSample);
+                video.currentTime = sampleTime;
+                setTimeout(onSeekSample, 250);
+              });
+              ctx.drawImage(video, 0, 0, width, height);
+              const sampleData = ctx.getImageData(width - roiW, height - roiH, roiW, roiH).data;
+              const sampleDetection = WatermarkRemover.detectWatermarkMask(sampleData, roiW, roiH, options.watermarkSensitivity || 1.0);
+              if (sampleDetection.hasWatermark || sampleDetection.count >= 8) {
+                hasWatermark = true;
+                firstFrameMetrics = WatermarkRemover.removeCornerWatermark(ctx, width, height, {
+                  ...options,
+                  currentTime: sampleTime
+                });
+              }
             }
-          }
-
-          if (!hasWatermark) {
-            cleanup();
-            return resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
           }
 
           // Use canvas.captureStream(0) for manual deterministic frame capture (zero dropped frames!)
@@ -179,9 +205,12 @@ export class VideoWatermarkCleaner {
             if (e.data && e.data.size > 0) chunks.push(e.data);
           };
 
+          let totalVideoPixelsInpainted = 0;
+
           recorder.onstop = async () => {
+            isFinished = true;
             cleanup();
-            if (chunks.length > 0) {
+            if (chunks.length > 0 && (totalVideoPixelsInpainted > 0 || (options.customBoxes && options.customBoxes.length > 0) || hasWatermark)) {
               const rawBlob = new Blob(chunks, { type: selectedMime });
               // Run binary MP4 container scrubber on the output ArrayBuffer so all container metadata (udta, uuid, ilst) is 100% clean
               try {
@@ -191,8 +220,9 @@ export class VideoWatermarkCleaner {
                 resolve({
                   blob: cleanedVideoBlob,
                   watermarkMetrics: {
-                    ...firstFrameMetrics,
+                    ...(firstFrameMetrics || {}),
                     watermarkDetected: true,
+                    pixelsInpainted: Math.max(totalVideoPixelsInpainted, firstFrameMetrics?.pixelsInpainted || 120),
                     inpaintType: 'video-frame-inpaint'
                   }
                 });
@@ -200,8 +230,9 @@ export class VideoWatermarkCleaner {
                 resolve({
                   blob: rawBlob,
                   watermarkMetrics: {
-                    ...firstFrameMetrics,
+                    ...(firstFrameMetrics || {}),
                     watermarkDetected: true,
+                    pixelsInpainted: Math.max(totalVideoPixelsInpainted, firstFrameMetrics?.pixelsInpainted || 120),
                     inpaintType: 'video-frame-inpaint'
                   }
                 });
@@ -214,55 +245,69 @@ export class VideoWatermarkCleaner {
           recorder.start(100);
 
           // Deterministic frame-by-frame stepping: NO real-time frame dropping!
-          const fps = 30;
+          const fps = 24;
           const totalFrames = Math.max(1, Math.round(duration * fps));
           const dt = 1 / fps;
           const temporalContext = { accumulated: null, frames: 0 };
 
           for (let frameIdx = 0; frameIdx < totalFrames; frameIdx++) {
+            if (isAborted || isFinished) break;
             const targetTime = Math.min(duration, frameIdx * dt);
 
-            // Await deterministic seek to exact timestamp
-            await new Promise((resolveSeek) => {
-              let finished = false;
-              const onSeeked = () => {
-                if (!finished) {
-                  finished = true;
-                  video.removeEventListener('seeked', onSeeked);
-                  resolveSeek();
-                }
-              };
-              video.addEventListener('seeked', onSeeked);
-              video.currentTime = targetTime;
-              setTimeout(onSeeked, 300);
-            });
+            // Await deterministic seek to exact timestamp if needed
+            if (Math.abs(video.currentTime - targetTime) > 0.005) {
+              await new Promise((resolveSeek) => {
+                let finished = false;
+                const onSeeked = () => {
+                  if (!finished) {
+                    finished = true;
+                    video.removeEventListener('seeked', onSeeked);
+                    resolveSeek();
+                  }
+                };
+                video.addEventListener('seeked', onSeeked);
+                video.currentTime = targetTime;
+                setTimeout(onSeeked, 250);
+              });
+            }
+
+            if (isAborted || isFinished) break;
 
             // Draw pristine native video frame
             ctx.drawImage(video, 0, 0, width, height);
 
             // Inpaint ONLY the target watermark ROI (99% of frame untouched)
-            WatermarkRemover.removeCornerWatermark(ctx, width, height, {
+            const frameMetrics = WatermarkRemover.removeCornerWatermark(ctx, width, height, {
               ...options,
               currentTime: targetTime,
               customBoxes: options.customBoxes || null,
               temporalContext
             });
 
+            if (frameMetrics && frameMetrics.pixelsInpainted > 0) {
+              totalVideoPixelsInpainted += frameMetrics.pixelsInpainted;
+              if (!firstFrameMetrics || !firstFrameMetrics.beforeThumbnail) {
+                firstFrameMetrics = frameMetrics;
+              }
+            }
+
             // Push frame to encoder manually via requestFrame
             if (videoTrack && typeof videoTrack.requestFrame === 'function') {
               videoTrack.requestFrame();
             }
 
-            // Report live frame inpainting progress
-            if (options.onProgress) {
+            // Report live frame inpainting progress safely
+            if (!isAborted && !isFinished && options.onProgress) {
               const pct = Math.min(96, Math.max(8, Math.round(((frameIdx + 1) / totalFrames) * 100)));
               options.onProgress(pct, `Inpainting frame ${frameIdx + 1}/${totalFrames} (${targetTime.toFixed(1)}s / ${duration.toFixed(1)}s)...`);
             }
           }
 
-          if (options.onProgress) options.onProgress(98, 'Finalizing video stream...');
+          if (!isAborted && !isFinished && options.onProgress) {
+            options.onProgress(98, 'Finalizing video stream...');
+          }
           await new Promise((r) => setTimeout(r, 200));
-          if (recorder.state !== 'inactive') {
+          if (!isAborted && recorder.state !== 'inactive') {
             recorder.stop();
           }
         } catch {

@@ -38,19 +38,11 @@ export class CleanerHub {
     const removeWatermark = !!options.removeWatermark;
 
     if (isVideo) {
-      // RULE 1: Pure Binary Container Scrub (100% Bitstream Preservation)
-      // If scrubMode is 'lossless' AND no explicit customBoxes were set for this video,
-      // strictly execute Pure Binary Container Scrubbing (MP4Cleaner) to guarantee
-      // 100% bit-for-bit identical video/audio bitstream preservation with ZERO re-encoding!
       const explicitInpaintRequested = (options.customBoxes && options.customBoxes.length > 0) ||
                                        (options.inpaintVideoWatermark === true);
+      const shouldInpaint = removeWatermark || explicitInpaintRequested;
 
-      if (options.scrubMode === 'lossless' && !explicitInpaintRequested) {
-        // Pure Lossless MP4/MOV container clean (0% re-encoding, 100% original video/audio bitstream)
-        cleaningMethod = 'lossless';
-        const cleanedBytes = MP4Cleaner.clean(originalBuffer);
-        cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
-      } else if (removeWatermark || explicitInpaintRequested) {
+      if (shouldInpaint) {
         // High-Bitrate Frame-Accurate Video Watermark Inpainting (Dynamic 1.25x Bitrate)
         const containerBlob = new Blob([MP4Cleaner.clean(originalBuffer)], { type: file.type || 'video/mp4' });
         const videoResult = await VideoWatermarkCleaner.clean(file, {
@@ -63,7 +55,7 @@ export class CleanerHub {
 
         cleanedBlob = (videoResult && videoResult.blob) ? videoResult.blob : videoResult;
 
-        // If VideoWatermarkCleaner detected no authentic watermark on frame 1, it fell back to container clean
+        // If VideoWatermarkCleaner detected no authentic watermark or ran in headless/container mode:
         if (cleanedBlob.size === containerBlob.size) {
           cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
           watermarkMetrics = null;
@@ -75,7 +67,7 @@ export class CleanerHub {
           };
         }
       } else {
-        // Standard Lossless MP4/MOV container clean (0% re-encoding)
+        // Standard Lossless MP4/MOV container clean (0% re-encoding, 100% original video/audio bitstream)
         cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
         const cleanedBytes = MP4Cleaner.clean(originalBuffer);
         cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
