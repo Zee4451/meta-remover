@@ -516,6 +516,27 @@ async function runBrowserPlaywrightTests() {
   const isCompareClosed = await compareModal.evaluate(el => !el.classList.contains('open'));
   assert(isCompareClosed === true, 'Compare Corner Fix modal closed on Escape key press');
 
+  // Verify Metadata Radar Cleaned Status Synchronization (Fix 3)
+  console.log('Testing Metadata Radar modal Cleaned Status synchronization...');
+  const dalleInspectBtn = dalleCard.locator('button[id^="inspectBtn-"]');
+  await dalleInspectBtn.click();
+  await page.waitForTimeout(300);
+
+  const radarContent = await page.locator('#tabRadar').innerHTML();
+  assert(radarContent.includes('Cleaned ✓'), 'Metadata Radar Status displays "Cleaned ✓" after processing');
+  assert(radarContent.includes('Stripped ✓'), 'Metadata Radar C2PA & Prompts display "Stripped ✓" after processing');
+  assert(radarContent.includes('Inpainted (100% Healed) ✓'), 'Metadata Radar displays "Inpainted (100% Healed) ✓" for cleaned watermark');
+  assert(!radarContent.includes('Pending cleaning'), 'Metadata Radar has no remaining "Pending cleaning" states');
+
+  // Check Diff Tab
+  await page.click('.tab-btn[data-tab="diff"]');
+  await page.waitForTimeout(100);
+  const diffContent = await page.locator('#tabDiff').innerHTML();
+  assert(diffContent.includes('CLEARED (0 B) ✓'), 'Metadata Diff tab displays "CLEARED (0 B) ✓" for C2PA');
+
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+
   // Clear queue
   await page.click('#clearQueueBtn');
   await page.waitForTimeout(200);

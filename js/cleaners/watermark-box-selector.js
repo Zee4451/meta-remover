@@ -402,27 +402,138 @@ export function healSelectedBoxes(ctx, nativeWidth, nativeHeight, boxes, current
     const imgData = ctx.getImageData(extX, extY, extW, extH);
     const data = imgData.data;
 
-    // Build mask: detect inner box pixels for boundary-guided Telea inpainting
-    const mask = new Uint8Array(extW * extH);
-    let boxPixelCount = 0;
     const innerStartX = roiX - extX;
     const innerStartY = roiY - extY;
     const innerEndX = Math.min(extW, innerStartX + roiW);
     const innerEndY = Math.min(extH, innerStartY + roiH);
+    const totalBoxPixels = (innerEndX - innerStartX) * (innerEndY - innerStartY);
+
+    // 4. Estimate underlying background color/luminance distribution from clean 6px perimeter ring
+    let sumR = 0, sumG = 0, sumB = 0, sumLum = 0, perimCount = 0;
+    for (let y = 0; y < extH; y++) {
+      for (let x = 0; x < extW; x++) {
+        if (x < innerStartX || x >= innerEndX || y < innerStartY || y >= innerEndY) {
+          const p = (y * extW + x) * 4;
+          const r = data[p];
+          const g = data[p + 1];
+          const b = data[p + 2];
+          sumR += r;
+          sumG += g;
+          sumB += b;
+          sumLum += 0.299 * r + 0.587 * g + 0.114 * b;
+          perimCount++;
+        }
+      }
+    }
+
+    const bgMeanR = perimCount > 0 ? sumR / perimCount : 128;
+    const bgMeanG = perimCount > 0 ? sumG / perimCount : 128;
+    const bgMeanB = perimCount > 0 ? sumB / perimCount : 128;
+    const bgMeanLum = perimCount > 0 ? sumLum / perimCount : 128;
+
+    // 5. Sub-Box Smart Stroke Segmentation inside the box
+    // Mark a pixel ONLY if it deviates from local background (bright/translucent sparkle or sharp logo edge)
+    const rawStrokeMask = new Uint8Array(extW * extH);
+    let strokeCount = 0;
 
     for (let y = innerStartY; y < innerEndY; y++) {
       for (let x = innerStartX; x < innerEndX; x++) {
-        mask[y * extW + x] = 1;
-        boxPixelCount++;
+        const p = (y * extW + x) * 4;
+        const r = data[p];
+        const g = data[p + 1];
+        const b = data[p + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        const deltaLum = lum - bgMeanLum;
+        const deltaColor = Math.hypot(r - bgMeanR, g - bgMeanG, b - bgMeanB);
+
+        // Gradient contrast
+        const leftP = (y * extW + Math.max(innerStartX, x - 1)) * 4;
+        const rightP = (y * extW + Math.min(innerEndX - 1, x + 1)) * 4;
+        const upP = (Math.max(innerStartY, y - 1) * extW + x) * 4;
+        const downP = (Math.min(innerEndY - 1, y + 1) * extW + x) * 4;
+
+        const gradX = Math.abs(data[rightP] - data[leftP]);
+        const gradY = Math.abs(data[downP] - data[upP]);
+        const grad = gradX + gradY;
+
+        const isStrokeOutlier = (deltaLum > 14) ||
+                                (deltaColor > 22) ||
+                                (grad > 28 && (deltaLum > 8 || deltaColor > 14)) ||
+                                (lum >= 205 && deltaLum > 8) ||
+                                (Math.abs(deltaLum) > 26);
+
+        if (isStrokeOutlier) {
+          rawStrokeMask[y * extW + x] = 1;
+          strokeCount++;
+        }
+      }
+    }
+
+    const mask = new Uint8Array(extW * extH);
+    let boxPixelCount = 0;
+
+    // Only fall back to full-box masking if fewer than 3% of pixels inside the user's custom box are detected as outliers
+    if (strokeCount < 0.03 * totalBoxPixels) {
+      for (let y = innerStartY; y < innerEndY; y++) {
+        for (let x = innerStartX; x < innerEndX; x++) {
+          mask[y * extW + x] = 1;
+          boxPixelCount++;
+        }
+      }
+    } else {
+      // 2px morphological dilation strictly confined within bounding box to catch anti-aliased edge halos
+      const dRad = 2;
+      for (let y = innerStartY; y < innerEndY; y++) {
+        for (let x = innerStartX; x < innerEndX; x++) {
+          let hit = false;
+          for (let dy = -dRad; dy <= dRad && !hit; dy++) {
+            const ny = y + dy;
+            if (ny < innerStartY || ny >= innerEndY) continue;
+            for (let dx = -dRad; dx <= dRad && !hit; dx++) {
+              const nx = x + dx;
+              if (nx < innerStartX || nx >= innerEndX) continue;
+              if (dx * dx + dy * dy <= dRad * dRad && rawStrokeMask[ny * extW + nx] === 1) {
+                hit = true;
+              }
+            }
+          }
+          if (hit) {
+            mask[y * extW + x] = 1;
+            boxPixelCount++;
+          }
+        }
       }
     }
 
     if (boxPixelCount === 0) continue;
 
-    // 4. Boundary-Inward Fast Marching (Telea) + Texture Grain Preservation
+    // 6. Reverse Alpha Unblending for semi-transparent watermark pixels
+    for (let y = innerStartY; y < innerEndY; y++) {
+      for (let x = innerStartX; x < innerEndX; x++) {
+        const idx = y * extW + x;
+        if (mask[idx] === 1) {
+          const p = idx * 4;
+          const r = data[p];
+          const g = data[p + 1];
+          const b = data[p + 2];
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          const deltaLum = lum - bgMeanLum;
+          if (deltaLum > 10) {
+            const estimatedAlpha = Math.min(0.70, Math.max(0.12, deltaLum / 220));
+            const invAlpha = 1 - estimatedAlpha;
+            data[p] = Math.min(255, Math.max(0, (r - estimatedAlpha * 255) / invAlpha));
+            data[p + 1] = Math.min(255, Math.max(0, (g - estimatedAlpha * 255) / invAlpha));
+            data[p + 2] = Math.min(255, Math.max(0, (b - estimatedAlpha * 255) / invAlpha));
+          }
+        }
+      }
+    }
+
+    // 7. Boundary-Inward Fast Marching (Telea) + Texture Grain Preservation
     inpaintMaskedRegion(data, mask, extW, extH);
 
-    // 5. Write ONLY the healed bounding box back to the canvas (99% of image remains 100% original!)
+    // 8. Write ONLY the healed bounding box back to the canvas (99% of image remains 100% original!)
     ctx.putImageData(imgData, extX, extY);
     totalPixelsHealed += boxPixelCount;
   }
