@@ -127,16 +127,21 @@ export class VideoWatermarkCleaner {
 
           recorder.start(100);
 
-          // Fast frame processing loop
+          // Fast frame processing loop with temporal mask stability
           let animId = null;
+          const temporalContext = { accumulated: null, frames: 0 };
+
           const processFrame = () => {
             if (video.paused || video.ended) return;
 
             // Draw pristine native video frame
             ctx.drawImage(video, 0, 0, width, height);
 
-            // Inpaint ONLY the bottom-right corner watermark
-            WatermarkRemover.removeCornerWatermark(ctx, width, height, options);
+            // Inpaint ONLY the bottom-right corner watermark with temporal smoothing across frames
+            WatermarkRemover.removeCornerWatermark(ctx, width, height, {
+              ...options,
+              temporalContext
+            });
 
             if ('requestVideoFrameCallback' in video) {
               video.requestVideoFrameCallback(processFrame);

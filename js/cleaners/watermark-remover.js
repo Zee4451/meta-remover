@@ -22,7 +22,8 @@ export class WatermarkRemover {
       customROI = null,
       dilationRadius = 3,
       noiseMatching = true,
-      sensitivity = 1.0
+      sensitivity = 1.0,
+      temporalContext = null // Optional temporal accumulator for video frame sequences
     } = options;
 
     // 1. Calculate Strict Region of Interest (ROI)
@@ -43,7 +44,33 @@ export class WatermarkRemover {
     // 2. Adaptive Gemini Sparkle / Badge Mask Detection
     const { mask, count, hasWatermark } = this.detectWatermarkMask(data, cw, ch, sensitivity);
 
-    if (!hasWatermark || count < 10) {
+    // Apply Temporal Smoothing across video frames to eliminate any edge flicker
+    let effectiveMask = mask;
+    let effectiveCount = count;
+    if (temporalContext) {
+      if (!temporalContext.accumulated || temporalContext.accumulated.length !== mask.length) {
+        temporalContext.accumulated = new Float32Array(mask.length);
+        temporalContext.frames = 0;
+      }
+      temporalContext.frames++;
+      const acc = temporalContext.accumulated;
+      const alpha = 0.25;
+      let smoothCount = 0;
+      const smoothedMask = new Uint8Array(mask.length);
+      for (let i = 0; i < mask.length; i++) {
+        acc[i] = acc[i] * (1 - alpha) + mask[i] * alpha;
+        if (acc[i] >= 0.20) {
+          smoothedMask[i] = 1;
+          smoothCount++;
+        }
+      }
+      if (smoothCount >= 10 || hasWatermark) {
+        effectiveMask = smoothedMask;
+        effectiveCount = smoothCount;
+      }
+    }
+
+    if ((!hasWatermark && effectiveCount < 10) || effectiveCount < 8) {
       // Zero false positives: if no authentic watermark signature is found, touch 0 pixels!
       return {
         watermarkDetected: false,
@@ -56,7 +83,7 @@ export class WatermarkRemover {
 
     // 3. Morphological Dilation (3px radius default)
     // Completely captures anti-aliasing edge halos and translucent boundary fringes
-    const dilatedMask = this.dilateMask(mask, cw, ch, dilationRadius);
+    const dilatedMask = this.dilateMask(effectiveMask, cw, ch, dilationRadius);
 
     // 4. Boundary-Guided Inpainting (Fast Marching / Directional Interpolation)
     this.inpaintBoundaryMarching(data, dilatedMask, cw, ch);
