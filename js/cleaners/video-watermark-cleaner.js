@@ -445,6 +445,7 @@ export class VideoWatermarkCleaner {
                 detectedDetections.push({
                   mask: detection.mask,
                   count: detection.count,
+                  star: detection.star || null,
                   cornerData
                 });
               }
@@ -453,7 +454,12 @@ export class VideoWatermarkCleaner {
             let effectiveWatermarkMask = null;
             let sampleCornerData = null;
 
-            if (detectedDetections.length === 1) {
+            // Prioritize stationary 4-point star watermark (Gemini / Veo) if detected in sample frames
+            const starDetection = detectedDetections.find(d => d.star && d.star.score >= 14.0);
+            if (starDetection) {
+              effectiveWatermarkMask = starDetection.mask;
+              sampleCornerData = starDetection.cornerData;
+            } else if (detectedDetections.length === 1) {
               effectiveWatermarkMask = detectedDetections[0].mask;
               sampleCornerData = detectedDetections[0].cornerData;
             } else if (detectedDetections.length > 1) {

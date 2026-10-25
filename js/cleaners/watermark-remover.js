@@ -264,10 +264,168 @@ export class WatermarkRemover {
   }
 
   /**
+   * Fast Astroid Multi-Scale 4-Point Star Watermark Detector (Google Gemini, Veo, Imagen)
+   * Mathematical Model: (|dx|/R)^p + (|dy|/R)^p <= 1.0 (Astroid / Hypocycloid)
+   * Scans ROI for high-contrast, chroma-neutral 4-point star badges.
+   */
+  static detect4PointStar(data, w, h, sensitivity = 1.0) {
+    if (w < 40 || h < 40) return null;
+
+    const totalPixels = w * h;
+    const lum = new Float32Array(totalPixels);
+    const sat = new Float32Array(totalPixels);
+    for (let i = 0, p = 0; i < totalPixels; i++, p += 4) {
+      const r = data[p], g = data[p + 1], b = data[p + 2];
+      lum[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+      sat[i] = Math.max(r, g, b) - Math.min(r, g, b);
+    }
+
+    const baseR = Math.round(Math.min(w, h) * 0.12);
+    const candidateRadii = [
+      Math.max(14, baseR - 6),
+      Math.max(18, baseR),
+      Math.max(22, baseR + 6),
+      Math.max(26, baseR + 12)
+    ];
+    const uniqueRadii = Array.from(new Set(candidateRadii));
+
+    let bestScore = 0;
+    let bestCenter = null;
+    let bestR = 24;
+
+    const threshContrast = 7.5 / Math.max(0.5, sensitivity);
+
+    for (const R of uniqueRadii) {
+      const p = 0.65;
+      const outerR = Math.round(R * 1.5);
+      const inOffsets = [];
+      const outOffsets = [];
+
+      for (let dy = -outerR; dy <= outerR; dy++) {
+        for (let dx = -outerR; dx <= outerR; dx++) {
+          const norm = Math.pow(Math.abs(dx) / R, p) + Math.pow(Math.abs(dy) / R, p);
+          if (norm <= 1.0) {
+            inOffsets.push({ dx, dy });
+          } else if (norm <= 1.45 && (dx * dx + dy * dy) <= outerR * outerR) {
+            outOffsets.push({ dx, dy });
+          }
+        }
+      }
+
+      const inLen = inOffsets.length;
+      const outLen = outOffsets.length;
+      if (inLen === 0 || outLen === 0) continue;
+
+      const margin = outerR + 2;
+      for (let y = margin; y < h - margin; y += 2) {
+        for (let x = margin; x < w - margin; x += 2) {
+          const centerIdx = y * w + x;
+          if (sat[centerIdx] > 48 || lum[centerIdx] < 55) continue;
+
+          let inSum = 0;
+          for (let i = 0; i < inLen; i++) {
+            inSum += lum[(y + inOffsets[i].dy) * w + (x + inOffsets[i].dx)];
+          }
+          let outSum = 0;
+          for (let i = 0; i < outLen; i++) {
+            outSum += lum[(y + outOffsets[i].dy) * w + (x + outOffsets[i].dx)];
+          }
+
+          const inAvg = inSum / inLen;
+          const outAvg = outSum / outLen;
+          const contrast = inAvg - outAvg;
+
+          if (contrast > threshContrast) {
+            const tipY1 = lum[(y - R) * w + x];
+            const tipY2 = lum[(y + R) * w + x];
+            const tipX1 = lum[y * w + (x - R)];
+            const tipX2 = lum[y * w + (x + R)];
+            const avgTips = (tipY1 + tipY2 + tipX1 + tipX2) * 0.25;
+
+            const diagD = Math.round(R * 0.65);
+            const diag1 = lum[(y - diagD) * w + (x - diagD)];
+            const diag2 = lum[(y - diagD) * w + (x + diagD)];
+            const diag3 = lum[(y + diagD) * w + (x - diagD)];
+            const diag4 = lum[(y + diagD) * w + (x + diagD)];
+            const avgDiag = (diag1 + diag2 + diag3 + diag4) * 0.25;
+
+            const tipContrast = avgTips - avgDiag;
+            const asymX = Math.abs(tipX1 - tipX2);
+            const asymY = Math.abs(tipY1 - tipY2);
+            const asym = Math.max(asymX, asymY);
+
+            // True 4-point star watermark has 4-fold symmetry (asymmetry < 20, whereas edges have asymmetry > 60-120)
+            if (tipContrast > 8.0 && asym < 22.0 && lum[centerIdx] > avgDiag + 8.0) {
+              const starShapeScore = (contrast * 1.5 + tipContrast * 1.5) - asym * 0.8;
+
+              if (starShapeScore > bestScore && starShapeScore > 14.0) {
+                bestScore = starShapeScore;
+                bestCenter = { x, y };
+                bestR = R;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (bestCenter && bestScore >= 14.0) {
+      let maxLum = lum[bestCenter.y * w + bestCenter.x];
+      let refinedX = bestCenter.x, refinedY = bestCenter.y;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const l = lum[(bestCenter.y + dy) * w + (bestCenter.x + dx)];
+          if (l > maxLum) {
+            maxLum = l;
+            refinedX = bestCenter.x + dx;
+            refinedY = bestCenter.y + dy;
+          }
+        }
+      }
+
+      const mask = new Uint8Array(totalPixels);
+      let count = 0;
+      const maskR = bestR + 6;
+      for (let dy = -maskR - 4; dy <= maskR + 4; dy++) {
+        const my = refinedY + dy;
+        if (my < 0 || my >= h) continue;
+        for (let dx = -maskR - 4; dx <= maskR + 4; dx++) {
+          const mx = refinedX + dx;
+          if (mx < 0 || mx >= w) continue;
+          const norm = Math.pow(Math.abs(dx) / maskR, 0.65) + Math.pow(Math.abs(dy) / maskR, 0.65);
+          if (norm <= 1.08) {
+            mask[my * w + mx] = 1;
+            count++;
+          }
+        }
+      }
+
+      return {
+        mask,
+        count,
+        hasWatermark: true,
+        star: {
+          center: { x: refinedX, y: refinedY },
+          radius: bestR,
+          score: bestScore
+        }
+      };
+    }
+
+    return null;
+  }
+
+  /**
    * Adaptive Gemini Sparkle & Badge Mask Detection
    * Analyzes local background luminance via perimeter sampling, chroma neutrality, and specular core.
    */
   static detectWatermarkMask(data, w, h, sensitivity = 1.0) {
+    // 0. Fast Astroid 4-Point Star Watermark Detector (Google Gemini, Veo, Imagen)
+    const starResult = this.detect4PointStar(data, w, h, sensitivity);
+    if (starResult && starResult.hasWatermark && starResult.count >= 8) {
+      return starResult;
+    }
+
     const totalPixels = w * h;
     const lum = new Float32Array(totalPixels);
     const sat = new Float32Array(totalPixels);

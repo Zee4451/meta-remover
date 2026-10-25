@@ -3,7 +3,7 @@
  * Provides offline caching for 100% client-side privacy on mobile and desktop.
  */
 
-const CACHE_NAME = 'ghostmeta-cache-v20';
+const CACHE_NAME = 'ghostmeta-cache-v21';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
