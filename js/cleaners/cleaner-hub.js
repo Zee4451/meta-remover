@@ -189,10 +189,12 @@ export class CleanerHub {
     // Generate output filename matching exact container format
     const extMatch = file.name.match(/\.[^.]+$/);
     let ext = extMatch ? extMatch[0].toLowerCase() : (isVideo ? '.mp4' : (isImage ? '.jpg' : ''));
-    if (cleaningMethod.includes('canvas')) {
+    if (cleaningMethod.includes('canvas') || cleaningMethod.includes('video-watermark')) {
       if (cleanedBlob.type === 'image/png') ext = '.png';
       else if (cleanedBlob.type === 'image/webp') ext = '.webp';
       else if (cleanedBlob.type === 'image/jpeg') ext = '.jpg';
+      else if (cleanedBlob.type && cleanedBlob.type.startsWith('video/webm')) ext = '.webm';
+      else if (cleanedBlob.type && cleanedBlob.type.startsWith('video/mp4')) ext = '.mp4';
     }
     const baseName = extMatch ? file.name.slice(0, -extMatch[0].length) : file.name;
     const safeBaseName = baseName.replace(/[<>:"/\\|?*]/g, '_').trim();

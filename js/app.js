@@ -1038,11 +1038,27 @@ class App {
     }
 
     const blob = item.result.cleanedBlob;
+    const extMatch = filename.match(/\.[^.]+$/);
+    const ext = extMatch ? extMatch[0].toLowerCase() : (item.file.name.match(/\.[^.]+$/)?.[0]?.toLowerCase() || '.mp4');
+    
+    // Ensure filename ends with proper extension
+    if (!filename.toLowerCase().endsWith(ext)) {
+      filename = `${filename.replace(/\.[^.]+$/, '')}${ext}`;
+    }
+
+    // STRICT SANITIZATION: Strip parameters (like ;codecs="...") from MIME type.
+    // In Edge & Chrome, showSaveFilePicker throws TypeError on MIME parameters,
+    // and Edge's download manager ignores a.download on blobs with codec parameters, renaming them to raw UUIDs!
+    let cleanMime = (blob.type || '').split(';')[0].trim().toLowerCase();
+    if (!cleanMime || cleanMime === 'application/octet-stream') {
+      cleanMime = ext === '.mp4' ? 'video/mp4' : (ext === '.webm' ? 'video/webm' : (ext === '.png' ? 'image/png' : (ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'application/octet-stream')));
+    }
+    const cleanBlob = new Blob([blob], { type: cleanMime });
 
     // 0. Primary for Mobile (Android & iOS): Native Web Share API
     // Opens phone's share sheet to save directly to Gallery / Photos or send to WhatsApp / Telegram
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
-    const shareFile = new File([blob], filename, { type: blob.type || 'video/mp4' });
+    const shareFile = new File([cleanBlob], filename, { type: cleanMime });
 
     if (isMobile && navigator.canShare && navigator.canShare({ files: [shareFile] })) {
       try {
@@ -1062,19 +1078,15 @@ class App {
     // 1. Primary Method for Desktop: Native File System Access API (Immediate Windows "Save As" Dialog)
     if (window.showSaveFilePicker) {
       try {
-        const extMatch = filename.match(/\.[^.]+$/);
-        const ext = extMatch ? extMatch[0].toLowerCase() : '.mp4';
-        const mimeType = blob.type || (ext === '.mp4' ? 'video/mp4' : 'application/octet-stream');
-        
         const handle = await window.showSaveFilePicker({
           suggestedName: filename,
           types: [{
-            description: ext === '.mp4' ? 'MP4 Video (*.mp4)' : 'Cleaned File',
-            accept: { [mimeType]: [ext] }
+            description: ext === '.mp4' ? 'MP4 Video (*.mp4)' : (ext === '.webm' ? 'WebM Video (*.webm)' : 'Cleaned File'),
+            accept: { [cleanMime]: [ext] }
           }]
         });
         const writable = await handle.createWritable();
-        await writable.write(blob);
+        await writable.write(cleanBlob);
         await writable.close();
         this.showToast(`Saved to ${handle.name}!`, 'success');
         return;
@@ -1087,23 +1099,28 @@ class App {
       }
     }
 
-    // 2. Direct Anchor with explicit File object and Blob URL (Zero network requests)
+    // 2. High-Compatibility Anchor & FileSaver Fallback (Guarantees exact filename & extension)
     try {
-      const file = new File([blob], filename, { type: blob.type || 'video/mp4' });
-      const url = URL.createObjectURL(file);
+      if (typeof window.saveAs === 'function') {
+        window.saveAs(cleanBlob, filename);
+        this.showToast(`Downloading ${filename}...`, 'success');
+        return;
+      }
+      const url = URL.createObjectURL(cleanBlob);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
       a.download = filename;
+      a.setAttribute('download', filename);
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         a.remove();
         URL.revokeObjectURL(url);
-      }, 30000);
+      }, 40000);
       this.showToast(`Downloading ${filename}...`, 'success');
     } catch (e) {
-      console.warn('Blob anchor fallback:', e);
+      console.warn('Download fallback error:', e);
       this.showToast(`Download failed: ${e.message}`, 'error');
     }
   }
@@ -1155,20 +1172,25 @@ class App {
       }
     }
 
-    // 2. Direct Blob URL Download (Zero network requests)
+    // 2. High-Compatibility ZIP Download (FileSaver or Direct Anchor)
     try {
-      const file = new File([zipBlob], zipName, { type: 'application/zip' });
-      const url = URL.createObjectURL(file);
+      if (typeof window.saveAs === 'function') {
+        window.saveAs(zipBlob, zipName);
+        this.showToast(`Downloaded ${cleanedItems.length} cleaned files in ZIP!`, 'success');
+        return;
+      }
+      const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
       a.download = zipName;
+      a.setAttribute('download', zipName);
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         a.remove();
         URL.revokeObjectURL(url);
-      }, 30000);
+      }, 40000);
       this.showToast(`Downloaded ${cleanedItems.length} cleaned files in ZIP!`, 'success');
     } catch (e) {
       console.warn('ZIP blob fallback:', e);

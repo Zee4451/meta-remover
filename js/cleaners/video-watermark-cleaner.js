@@ -589,11 +589,12 @@ export class VideoWatermarkCleaner {
             isFinished = true;
             cleanup();
             if (chunks.length > 0 && hasWatermark) {
-              const rawBlob = new Blob(chunks, { type: selectedMime });
+              const cleanMime = selectedMime.split(';')[0].trim() || 'video/mp4';
+              const rawBlob = new Blob(chunks, { type: cleanMime });
               try {
                 const rawBuffer = await rawBlob.arrayBuffer();
                 const scrubbedBytes = MP4Cleaner.clean(rawBuffer);
-                const cleanedVideoBlob = new Blob([scrubbedBytes], { type: selectedMime });
+                const cleanedVideoBlob = new Blob([scrubbedBytes], { type: cleanMime });
                 resolve({
                   blob: cleanedVideoBlob,
                   watermarkMetrics: {
