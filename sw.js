@@ -3,7 +3,7 @@
  * Provides offline caching for 100% client-side privacy on mobile and desktop.
  */
 
-const CACHE_NAME = 'ghostmeta-cache-v18';
+const CACHE_NAME = 'ghostmeta-cache-v19';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -24,6 +24,7 @@ const ASSETS_TO_CACHE = [
   '/js/cleaners/canvas-cleaner.js',
   '/js/cleaners/watermark-remover.js',
   '/js/cleaners/video-watermark-cleaner.js',
+  '/js/cleaners/camera-spoofer.js',
   '/js/detectors/ai-detector.js',
   '/js/utils/samples.js'
 ];

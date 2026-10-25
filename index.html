@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
-  <link rel="stylesheet" href="styles.css?v=18">
+  <link rel="stylesheet" href="styles.css?v=19">
   <!-- Local Offline-First Vendor Libraries -->
   <script src="js/vendor/jszip.min.js"></script>
   <script src="js/vendor/FileSaver.min.js"></script>
@@ -257,6 +257,42 @@
               <button type="button" class="btn-box-selector" id="openBoxSelectorBtn" title="Draw custom watermark boxes or setup video tracker">
                 <span>🎯</span> Draw / Edit Custom Boxes
               </button>
+            </div>
+
+            <!-- Stealth Camera Mode / EXIF Spoofer -->
+            <div class="toggle-item stealth-camera-toggle-item">
+              <div class="toggle-info">
+                <span class="toggle-name">
+                  <span>📷</span> Stealth Camera Mode (EXIF Spoofer)
+                  <span class="badge-stealth-pill">Algorithm Safe</span>
+                </span>
+                <span class="toggle-sub">Inject authentic camera & lens tags (iPhone 16 Pro, Sony A7IV) without GPS so Instagram, TikTok & LinkedIn treat files as genuine photos</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggleStealthCamera" aria-label="Stealth Camera Mode">
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="stealth-camera-group" id="stealthCameraGroup" style="display: none;">
+              <div class="stealth-camera-row">
+                <label for="stealthCameraSelect" class="stealth-camera-label">
+                  <span>📸</span> Camera Hardware Profile:
+                </label>
+                <select id="stealthCameraSelect" class="form-select-camera" aria-label="Target Camera Profile">
+                  <option value="iphone-16-pro" selected>Apple iPhone 16 Pro (Best for Instagram / TikTok / Reels)</option>
+                  <option value="sony-a7iv">Sony Alpha A7 IV (ILCE-7M4) (Professional / LinkedIn)</option>
+                  <option value="canon-eos-r5">Canon EOS R5 (Pro Studio / Commercial)</option>
+                  <option value="fujifilm-xt5">Fujifilm X-T5 (Film Simulation Aesthetic)</option>
+                </select>
+              </div>
+              <div class="stealth-camera-info" id="stealthCameraInfo">
+                <span class="stealth-pill-tag">📱 Smartphone</span>
+                <span class="stealth-pill-tag">24mm f/1.78</span>
+                <span class="stealth-pill-tag">ISO 64</span>
+                <span class="stealth-pill-tag">sRGB</span>
+                <span class="stealth-pill-tag safe">0 GPS (Private)</span>
+              </div>
             </div>
           </div>
         </div>
@@ -612,6 +648,6 @@
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
   <!-- Application Script -->
-  <script type="module" src="js/app.js?v=18"></script>
+  <script type="module" src="js/app.js?v=19"></script>
 </body>
 </html>

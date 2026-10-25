@@ -510,16 +510,29 @@ export class AIDetector {
         const tag = isLittleEndian ? view.getUint16(offset, true) : view.getUint16(offset, false);
         const valOffset = isLittleEndian ? view.getUint32(offset + 8, true) : view.getUint32(offset + 8, false);
 
-        if (tag === 0x010F) result.exif.Make = 'Detected';
-        if (tag === 0x0110) result.exif.Model = 'Detected';
+        if (tag === 0x010F) {
+          result.exif.Make = 'Detected';
+          if (valOffset < payload.byteLength) {
+            const str = new TextDecoder().decode(payload.slice(valOffset, Math.min(valOffset + 64, payload.byteLength)));
+            result.exif.Make = str.split('\x00')[0].trim() || 'Detected';
+          }
+        }
+        if (tag === 0x0110) {
+          result.exif.Model = 'Detected';
+          if (valOffset < payload.byteLength) {
+            const str = new TextDecoder().decode(payload.slice(valOffset, Math.min(valOffset + 64, payload.byteLength)));
+            result.exif.Model = str.split('\x00')[0].trim() || 'Detected';
+          }
+        }
         if (tag === 0x0131) {
           result.exif.Software = 'Detected';
           if (valOffset < payload.byteLength) {
             const str = new TextDecoder().decode(payload.slice(valOffset, Math.min(valOffset + 64, payload.byteLength)));
-            result.exif.SoftwareName = str.replace(/\x00/g, '');
-            if (/midjourney|dall-e|stablediffusion|comfyui|novelai/i.test(str)) {
+            const cleanSoftware = str.split('\x00')[0].trim();
+            result.exif.SoftwareName = cleanSoftware || 'Detected';
+            if (/midjourney|dall-e|stablediffusion|comfyui|novelai/i.test(cleanSoftware)) {
               result.hasAIMetadata = true;
-              result.modelInfo.push(`Software: ${result.exif.SoftwareName}`);
+              result.modelInfo.push(`Software: ${cleanSoftware}`);
             }
           }
         }

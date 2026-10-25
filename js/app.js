@@ -4,10 +4,10 @@
  * sample creation, theme toggling, and the metadata inspector modal.
  */
 
-import { CleanerHub } from './cleaners/cleaner-hub.js?v=16';
-import { SampleGenerator } from './utils/samples.js?v=16';
-import { AIDetector } from './detectors/ai-detector.js?v=16';
-import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=16';
+import { CleanerHub } from './cleaners/cleaner-hub.js?v=19';
+import { SampleGenerator } from './utils/samples.js?v=19';
+import { AIDetector } from './detectors/ai-detector.js?v=19';
+import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=19';
 
 class App {
   constructor() {
@@ -47,6 +47,10 @@ class App {
     this.toggleWatermark = document.getElementById('toggleWatermark');
     this.cornerPresetSelect = document.getElementById('cornerPresetSelect');
     this.cornerPresetGroup = document.getElementById('cornerPresetGroup');
+    this.toggleStealthCamera = document.getElementById('toggleStealthCamera');
+    this.stealthCameraGroup = document.getElementById('stealthCameraGroup');
+    this.stealthCameraSelect = document.getElementById('stealthCameraSelect');
+    this.stealthCameraInfo = document.getElementById('stealthCameraInfo');
 
     // Action bar & Queue
     this.actionBar = document.getElementById('actionBar');
@@ -261,6 +265,24 @@ class App {
       });
     }
 
+    // Stealth Camera Mode Listeners
+    if (this.toggleStealthCamera && this.stealthCameraGroup) {
+      this.toggleStealthCamera.addEventListener('change', () => {
+        const isChecked = this.toggleStealthCamera.checked;
+        this.stealthCameraGroup.style.display = isChecked ? 'flex' : 'none';
+        if (isChecked) {
+          this.updateStealthCameraInfo();
+          this.showToast('Stealth Camera Profile enabled! Authentic camera tags will be injected (0 GPS).', 'info');
+        }
+      });
+    }
+
+    if (this.stealthCameraSelect) {
+      this.stealthCameraSelect.addEventListener('change', () => {
+        this.updateStealthCameraInfo();
+      });
+    }
+
     // ROI Modal Action Buttons
     if (this.closeRoiModalBtn) {
       this.closeRoiModalBtn.addEventListener('click', () => this.closeRoiModal());
@@ -423,6 +445,49 @@ class App {
     } else {
       this.themeIconDark.style.display = 'block';
       this.themeIconLight.style.display = 'none';
+    }
+  }
+
+  updateStealthCameraInfo() {
+    if (!this.stealthCameraInfo || !this.stealthCameraSelect) return;
+    const profile = this.stealthCameraSelect.value;
+    switch (profile) {
+      case 'iphone-16-pro':
+        this.stealthCameraInfo.innerHTML = `
+          <span class="stealth-pill-tag">📱 Apple iPhone 16 Pro</span>
+          <span class="stealth-pill-tag">24mm f/1.78</span>
+          <span class="stealth-pill-tag">1/120s ISO 64</span>
+          <span class="stealth-pill-tag">sRGB</span>
+          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
+        `;
+        break;
+      case 'sony-a7iv':
+        this.stealthCameraInfo.innerHTML = `
+          <span class="stealth-pill-tag">📷 Sony Alpha A7 IV</span>
+          <span class="stealth-pill-tag">FE 24-70mm GM II</span>
+          <span class="stealth-pill-tag">35mm f/2.8 ISO 100</span>
+          <span class="stealth-pill-tag">sRGB</span>
+          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
+        `;
+        break;
+      case 'canon-eos-r5':
+        this.stealthCameraInfo.innerHTML = `
+          <span class="stealth-pill-tag">🎥 Canon EOS R5</span>
+          <span class="stealth-pill-tag">RF 24-70mm L IS</span>
+          <span class="stealth-pill-tag">50mm f/2.8 ISO 100</span>
+          <span class="stealth-pill-tag">sRGB</span>
+          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
+        `;
+        break;
+      case 'fujifilm-xt5':
+        this.stealthCameraInfo.innerHTML = `
+          <span class="stealth-pill-tag">🎞️ Fujifilm X-T5</span>
+          <span class="stealth-pill-tag">XF 33mm F1.4 R</span>
+          <span class="stealth-pill-tag">50mm f/1.4 ISO 125</span>
+          <span class="stealth-pill-tag">sRGB</span>
+          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
+        `;
+        break;
     }
   }
 
@@ -746,6 +811,9 @@ class App {
         ? item.customBoxes
         : (this.globalCustomBoxes && this.globalCustomBoxes.length > 0 ? this.globalCustomBoxes : null);
 
+      const isStealthActive = this.toggleStealthCamera ? this.toggleStealthCamera.checked : false;
+      const cameraProfile = this.stealthCameraSelect ? this.stealthCameraSelect.value : 'iphone-16-pro';
+
       const options = {
         scrubMode: this.currentMode,
         antiSynthID: this.toggleSynthID.checked,
@@ -753,6 +821,8 @@ class App {
         stripPrompts: this.togglePrompts.checked,
         stripGPS: this.toggleGPS.checked,
         removeWatermark: this.toggleWatermark ? this.toggleWatermark.checked : true,
+        stealthCameraMode: isStealthActive,
+        cameraProfile: cameraProfile,
         corner: customBoxes ? 'custom' : (this.cornerPresetSelect ? this.cornerPresetSelect.value : 'bottom-right'),
         customBoxes: customBoxes,
         onProgress: onProgress
@@ -860,6 +930,9 @@ class App {
           if (item.customBoxes && item.customBoxes.length > 0) {
             cleanTags += `<span class="badge-roi-custom" id="roiBadge-${item.id}">🎯 ${item.customBoxes.length} Custom Box${item.customBoxes.length === 1 ? '' : 'es'}</span>`;
           }
+          if (result.cameraProfileInjected) {
+            cleanTags += `<span class="badge-stealth-camera" title="Injected authentic camera metadata (0 GPS) to bypass social platform scrubbing detection">📷 ${this.escapeHtml(result.cameraProfileName || 'Stealth Camera')}</span>`;
+          }
           cleanTags += `<span class="tag-badge" style="color: var(--accent-cyan); border-color: rgba(6,182,212,0.3); background: rgba(6,182,212,0.08);" title="Click to view full Radar comparison">🔍 Inspect Radar</span>`;
           tagsContainer.innerHTML = cleanTags;
         } else {
@@ -875,6 +948,9 @@ class App {
           }
           if (item.customBoxes && item.customBoxes.length > 0) {
             cleanTags += `<span class="badge-roi-custom" id="roiBadge-${item.id}">🎯 ${item.customBoxes.length} Custom Box${item.customBoxes.length === 1 ? '' : 'es'}</span>`;
+          }
+          if (result.cameraProfileInjected) {
+            cleanTags += `<span class="badge-stealth-camera" title="Injected authentic camera metadata (0 GPS) to bypass social platform scrubbing detection">📷 ${this.escapeHtml(result.cameraProfileName || 'Stealth Camera')}</span>`;
           }
           cleanTags += `<span class="tag-badge" style="color: var(--accent-cyan); border-color: rgba(6,182,212,0.3); background: rgba(6,182,212,0.08);" title="Click to view full Radar comparison">🔍 Inspect Radar</span>`;
           tagsContainer.innerHTML = cleanTags;
@@ -1233,10 +1309,20 @@ class App {
             <tr>
               <td>EXIF / GPS Tags</td>
               <td>${isProcessed 
-                ? (item.result?.afterAnalysis?.hasGPS || Object.keys(item.result?.afterAnalysis?.exif || {}).length > 0 
-                    ? '<span class="badge-ai-threat badge-threat-high">Tags Detected</span>' 
-                    : '<span class="badge-radar-clean">Stripped ✓</span>') 
+                ? (item.result?.cameraProfileInjected
+                    ? `<span class="badge-radar-clean">Spoofed (${item.result.cameraProfileName || 'Authentic Camera'}) • 0 GPS ✓</span>`
+                    : (item.result?.afterAnalysis?.hasGPS || Object.keys(item.result?.afterAnalysis?.exif || {}).length > 0 
+                        ? '<span class="badge-ai-threat badge-threat-high">Tags Detected</span>' 
+                        : '<span class="badge-radar-clean">Stripped ✓</span>')) 
                 : 'Pending'}</td>
+            </tr>
+            <tr>
+              <td>Stealth Camera Profile</td>
+              <td>${isProcessed
+                ? (item.result?.cameraProfileInjected
+                    ? `<span class="badge-radar-clean">Active: ${item.result.cameraProfileName || 'Apple iPhone 16 Pro'} (0 GPS) ✓</span>`
+                    : '<span style="color: var(--text-muted);">Disabled (Standard Scrub)</span>')
+                : (this.toggleStealthCamera?.checked ? '<span style="color: #c084fc;">Ready to Inject</span>' : 'Disabled')}</td>
             </tr>
             ${isVideo ? `
             <tr>
@@ -1333,6 +1419,9 @@ class App {
               : 'Pending'}</td></tr>
             <tr><td>GPS Coordinates</td><td>${isProcessed 
               ? (item.result?.afterAnalysis?.hasGPS ? '<strong style="color: #ef4444;">LEAKED</strong>' : '<strong style="color: var(--accent-emerald);">CLEARED ✓</strong>') 
+              : 'Pending'}</td></tr>
+            <tr><td>Stealth Camera Profile</td><td>${isProcessed 
+              ? (item.result?.cameraProfileInjected ? `<strong style="color: var(--accent-emerald);">${item.result.cameraProfileName} (0 GPS • Platform Safe) ✓</strong>` : 'None (Scrubbed)') 
               : 'Pending'}</td></tr>
             ${isVideo ? `
             <tr><td>Video Container Atoms</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">0 (Wiped to standard \'free\' atoms) ✓</strong>' : 'Pending'}</td></tr>

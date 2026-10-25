@@ -16,6 +16,7 @@ import { WebPCleaner } from '../js/cleaners/webp-cleaner.js';
 import { CleanerHub } from '../js/cleaners/cleaner-hub.js';
 import { WatermarkRemover, healSelectedBoxes } from '../js/cleaners/watermark-remover.js';
 import { getLosslessTargetBitrate, getRealtimeVideoBitrate, compileInpaintLUT, executeInpaintLUT } from '../js/cleaners/video-watermark-cleaner.js';
+import { CameraSpoofer, CAMERA_PROFILES } from '../js/cleaners/camera-spoofer.js';
 
 let passedChecks = 0;
 let totalChecks = 0;
@@ -459,6 +460,62 @@ async function runBinaryUnitTests() {
   assert(testVideoResult.auditVerification.udtaRemaining === 0, 'Audit verification confirms 0 udta atoms remaining');
   assert(testVideoResult.auditVerification.c2paRemaining === 0, 'Audit verification confirms 0 C2PA remaining');
   assert(testVideoResult.auditVerification.isBinaryClean === true, 'Audit verification confirms isBinaryClean === true');
+
+  // 12. Stealth Camera EXIF & Hardware Spoofer ("Stealth Camera Mode")
+  console.log('\n[12/12] Testing Stealth Camera Profile Injection (iPhone 16 Pro, Sony A7IV, Canon EOS R5)...');
+  
+  // A. JPEG Injection - Apple iPhone 16 Pro
+  const jpgSpoofFile = new File([rawJpg], 'test-camera-spoof.jpg', { type: 'image/jpeg' });
+  const jpgSpoofResult = await CleanerHub.processFile(jpgSpoofFile, {
+    scrubMode: 'lossless',
+    stealthCameraMode: true,
+    cameraProfile: 'iphone-16-pro'
+  });
+  assert(jpgSpoofResult.cameraProfileInjected === true, 'CleanerHub flags cameraProfileInjected === true');
+  assert(jpgSpoofResult.cameraProfileName === 'Apple iPhone 16 Pro', 'CleanerHub reports active profile "Apple iPhone 16 Pro"');
+  
+  const spoofedJpgBuffer = await jpgSpoofResult.cleanedBlob.arrayBuffer();
+  const spoofedJpgAnalysis = await AIDetector.detect(
+    new File([jpgSpoofResult.cleanedBlob], 'test-camera-spoof.jpg', { type: 'image/jpeg' }),
+    spoofedJpgBuffer
+  );
+  assert(spoofedJpgAnalysis.exif?.Make === 'Apple', 'Cleaned JPEG has authentic Make: "Apple"');
+  assert(spoofedJpgAnalysis.exif?.Model === 'iPhone 16 Pro', 'Cleaned JPEG has authentic Model: "iPhone 16 Pro"');
+  assert(spoofedJpgAnalysis.exif?.SoftwareName === '18.1', 'Cleaned JPEG has authentic iOS Software: "18.1"');
+  assert(!spoofedJpgAnalysis.hasGPS, 'Cleaned JPEG has STRICT ZERO GPS coordinates (no location leakage)');
+  assert(!spoofedJpgAnalysis.hasAIMetadata, 'Cleaned JPEG has 0 AI metadata tags');
+  assert(jpgSpoofResult.auditVerification.isBinaryClean === true, 'Audit verification confirms isBinaryClean === true with authentic camera profile');
+
+  // B. PNG Injection - Sony Alpha A7 IV
+  const pngSpoofFile = new File([rawPng], 'test-camera-spoof.png', { type: 'image/png' });
+  const pngSpoofResult = await CleanerHub.processFile(pngSpoofFile, {
+    scrubMode: 'lossless',
+    stealthCameraMode: true,
+    cameraProfile: 'sony-a7iv'
+  });
+  const spoofedPngBuffer = await pngSpoofResult.cleanedBlob.arrayBuffer();
+  const spoofedPngAnalysis = await AIDetector.detect(
+    new File([pngSpoofResult.cleanedBlob], 'test-camera-spoof.png', { type: 'image/png' }),
+    spoofedPngBuffer
+  );
+  assert(spoofedPngAnalysis.exif?.Make === 'SONY', 'Cleaned PNG has authentic Make: "SONY"');
+  assert(spoofedPngAnalysis.exif?.Model === 'ILCE-7M4', 'Cleaned PNG has authentic Model: "ILCE-7M4"');
+  assert(!spoofedPngAnalysis.hasGPS, 'Cleaned PNG has STRICT ZERO GPS coordinates');
+  assert(!spoofedPngAnalysis.hasAIMetadata, 'Cleaned PNG has 0 AI metadata tags');
+
+  // C. MP4 Video QuickTime udta Container Injection - Canon EOS R5
+  const mp4SpoofFile = new File([rawMp4], 'test-camera-spoof.mp4', { type: 'video/mp4' });
+  const mp4SpoofResult = await CleanerHub.processFile(mp4SpoofFile, {
+    scrubMode: 'lossless',
+    stealthCameraMode: true,
+    cameraProfile: 'canon-eos-r5'
+  });
+  assert(mp4SpoofResult.cleanedSize === rawMp4.length, 'Cleaned MP4 preserves exact byte size with camera profile in udta box');
+  const spoofedMp4Bytes = new Uint8Array(await mp4SpoofResult.cleanedBlob.arrayBuffer());
+  const spoofedMp4Str = Buffer.from(spoofedMp4Bytes).toString('latin1');
+  assert(spoofedMp4Str.includes('Canon') && spoofedMp4Str.includes('EOS R5'), 'Cleaned MP4 contains authentic "Canon EOS R5" QuickTime tags');
+  assert(!spoofedMp4Str.includes('c2pa'), 'Cleaned MP4 has 0 C2PA tags');
+  assert(!spoofedMp4Str.includes('Sora'), 'Cleaned MP4 has 0 Sora tags');
 }
 
 async function runBrowserPlaywrightTests() {
@@ -823,6 +880,60 @@ async function runBrowserPlaywrightTests() {
     console.error('Violating requests:', mutationRequests);
   }
   assert(mutationRequests.length === 0, 'ZERO external network requests (POST/PUT) occurred during file processing & download');
+
+  // 11. Test Stealth Camera Mode Toggle and UI Radar Modal
+  console.log('\n[Test 12] Testing Stealth Camera Mode UI Toggle & Metadata Radar Integration...');
+  const stealthToggle = page.locator('#toggleStealthCamera');
+  assert(await stealthToggle.count() === 1, 'Found #toggleStealthCamera switch in settings panel');
+  
+  // Verify initially stealthCameraGroup is hidden
+  const stealthGroup = page.locator('#stealthCameraGroup');
+  assert(!(await stealthGroup.isVisible()), 'stealthCameraGroup initially hidden');
+  
+  // Clear any existing items in queue first
+  const clearBtn = page.locator('#clearQueueBtn');
+  if (await clearBtn.isVisible()) {
+    await clearBtn.click();
+    await page.waitForTimeout(200);
+  }
+
+  // Toggle ON using the visible slider or force click on checkbox
+  await page.click('.stealth-camera-toggle-item .slider');
+  await page.waitForTimeout(300);
+  assert(await stealthGroup.isVisible(), 'stealthCameraGroup becomes visible when toggled ON');
+
+  // Verify camera selector has 4 authentic profiles
+  const cameraSelect = page.locator('#stealthCameraSelect');
+  await cameraSelect.selectOption('sony-a7iv');
+  await page.waitForTimeout(100);
+  
+  const stealthInfoText = await page.locator('#stealthCameraInfo').textContent();
+  assert(stealthInfoText.includes('Sony Alpha A7 IV'), 'Stealth camera info pill displays Sony Alpha A7 IV specs');
+  assert(stealthInfoText.includes('0 GPS (Private)'), 'Stealth camera info pill highlights 0 GPS privacy guarantee');
+
+  // Click Sample JPG Button and Clean
+  await page.locator('#sampleDalleBtn').click();
+  await page.waitForTimeout(600);
+
+  const sampleCard = page.locator('.file-card').first();
+  await sampleCard.locator('.btn-primary', { hasText: 'Clean' }).click();
+  await page.waitForSelector('.file-card.cleaned', { timeout: 10000 });
+
+  // Assert card has Stealth badge
+  const cardStealthBadge = sampleCard.locator('.badge-stealth-camera');
+  assert(await cardStealthBadge.count() > 0, 'Cleaned file card displays 📷 Stealth Camera badge');
+  const cardBadgeText = await cardStealthBadge.textContent();
+  assert(cardBadgeText.includes('Sony Alpha A7 IV'), `File card stealth badge text matches selected profile: "${cardBadgeText}"`);
+
+  // Open Inspector Radar modal and verify
+  await sampleCard.locator('.btn-icon[id^="inspectBtn-"]').click();
+  await page.waitForSelector('#inspectorModal.open', { timeout: 5000 });
+  const radarHtml = await page.locator('#tabRadar').innerHTML();
+  assert(radarHtml.includes('Sony Alpha A7 IV') && radarHtml.includes('0 GPS'), 'Metadata Radar modal confirms Sony Alpha A7 IV injection without GPS');
+
+  // Close modal
+  await page.locator('#modalCloseBtn').click();
+  await page.waitForTimeout(200);
 
   await browser.close();
 }

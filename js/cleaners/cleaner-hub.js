@@ -11,6 +11,7 @@ import { WebPCleaner } from './webp-cleaner.js';
 import { MP4Cleaner } from './mp4-cleaner.js';
 import { CanvasCleaner } from './canvas-cleaner.js';
 import { VideoWatermarkCleaner } from './video-watermark-cleaner.js';
+import { CameraSpoofer, CAMERA_PROFILES } from './camera-spoofer.js';
 
 export class CleanerHub {
   /**
@@ -137,6 +138,14 @@ export class CleanerHub {
       cleanedBlob = new Blob([originalBuffer], { type: file.type || 'application/octet-stream' });
     }
 
+    // 1b. Stealth Camera Profile Injection (if requested)
+    if (options.stealthCameraMode) {
+      const rawCleanedBytes = new Uint8Array(await cleanedBlob.arrayBuffer());
+      const profileKey = options.cameraProfile || 'iphone-16-pro';
+      const spoofedBytes = CameraSpoofer.inject(rawCleanedBytes, profileKey, cleanedBlob.type);
+      cleanedBlob = new Blob([spoofedBytes], { type: cleanedBlob.type });
+    }
+
     // 2. Post-cleaning metadata verification!
     const cleanedBuffer = await cleanedBlob.arrayBuffer();
     const afterAnalysis = await AIDetector.detect(
@@ -151,20 +160,25 @@ export class CleanerHub {
       : new Uint8Array([...cleanedBytes.subarray(0, 750000), ...cleanedBytes.subarray(cleanedBytes.length - 750000)]);
     const cleanedText = new TextDecoder('utf-8', { fatal: false }).decode(sampleBytes);
 
+    const activeCameraProfile = options.stealthCameraMode
+      ? (CAMERA_PROFILES[options.cameraProfile || 'iphone-16-pro']?.name || 'Apple iPhone 16 Pro')
+      : null;
+
     const auditVerification = {
       verifiedAt: Date.now(),
       c2paRemaining: afterAnalysis.c2pa?.found ? 1 : (cleanedText.includes('c2pa') || cleanedText.includes('jumd') ? 1 : 0),
       promptsRemaining: afterAnalysis.prompts?.length || 0,
-      exifTagsRemaining: Object.keys(afterAnalysis.exif || {}).length,
+      exifTagsRemaining: options.stealthCameraMode ? 0 : Object.keys(afterAnalysis.exif || {}).length,
       synthIdRemaining: cleanedText.includes('SynthID') ? 1 : 0,
       trainedAlgorithmicMediaRemaining: cleanedText.includes('trainedAlgorithmicMedia') ? 1 : 0,
-      udtaRemaining: (isVideo && cleanedText.includes('udta')) ? 1 : 0,
+      udtaRemaining: (isVideo && !options.stealthCameraMode && cleanedText.includes('udta')) ? 1 : 0,
       meanAbsolutePixelDiff: (watermarkMetrics && watermarkMetrics.pixelDiff !== undefined)
         ? watermarkMetrics.pixelDiff
         : (watermarkMetrics && watermarkMetrics.pixelsInpainted > 0 ? 15.0 : 0.0),
+      cameraProfile: activeCameraProfile,
       isBinaryClean: !afterAnalysis.hasAIMetadata &&
                      !afterAnalysis.hasGPS &&
-                     Object.keys(afterAnalysis.exif || {}).length === 0 &&
+                     (!options.stealthCameraMode ? Object.keys(afterAnalysis.exif || {}).length === 0 : true) &&
                      !cleanedText.includes('SynthID') &&
                      !cleanedText.includes('trainedAlgorithmicMedia')
     };
@@ -198,7 +212,10 @@ export class CleanerHub {
       afterAnalysis: afterAnalysis,
       watermarkMetrics: watermarkMetrics,
       auditVerification: auditVerification,
-      isFullyClean: !afterAnalysis.hasAIMetadata && !afterAnalysis.hasGPS && Object.keys(afterAnalysis.exif).length === 0
+      cameraProfile: activeCameraProfile,
+      cameraProfileInjected: !!options.stealthCameraMode,
+      cameraProfileName: activeCameraProfile,
+      isFullyClean: !afterAnalysis.hasAIMetadata && !afterAnalysis.hasGPS && (!options.stealthCameraMode ? Object.keys(afterAnalysis.exif).length === 0 : true)
     };
   }
 }
