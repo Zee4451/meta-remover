@@ -1311,9 +1311,11 @@ progress::-moz-progress-bar {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  pointer-events: none;
 }
 
 .toast {
+  pointer-events: auto;
   background: var(--bg-surface-elevated);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -1819,6 +1821,46 @@ progress::-moz-progress-bar {
   box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
 }
 
+.roi-nudge-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.btn-nudge-pill {
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.btn-nudge-pill:hover,
+.btn-nudge-pill:focus-visible {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.btn-nudge-pill:active {
+  transform: scale(0.95);
+  background: rgba(16, 185, 129, 0.2);
+  border-color: var(--accent-emerald);
+}
+
 .roi-instructions {
   font-size: 0.8rem;
   color: var(--text-secondary);
@@ -1832,35 +1874,53 @@ progress::-moz-progress-bar {
 .roi-viewport-container {
   position: relative;
   width: 100%;
-  min-height: 300px;
-  max-height: 500px;
+  flex: 1 1 auto;
+  min-height: 280px;
+  max-height: 520px;
   background: #030712;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
   overflow: hidden;
   user-select: none;
 }
 
+.roi-media-viewport {
+  position: relative;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
 .roi-media-wrapper {
   position: relative;
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   max-width: 100%;
-  max-height: 440px;
+  max-height: 100%;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+  border-radius: 4px;
+  background: #050b14;
 }
 
 #roiPreviewImg,
 #roiPreviewVideo {
   display: block;
   max-width: 100%;
-  max-height: 440px;
+  max-height: 100%;
   width: auto;
   height: auto;
   object-fit: contain;
   pointer-events: none;
+  border-radius: 4px;
 }
 
 #roiOverlayCanvas {
@@ -1872,6 +1932,7 @@ progress::-moz-progress-bar {
   cursor: crosshair;
   touch-action: none;
   z-index: 10;
+  border-radius: 4px;
 }
 
 .roi-video-scrubber-bar {
@@ -2578,32 +2639,73 @@ progress::-moz-progress-bar {
   .modal-roi-content {
     width: 98vw !important;
     max-width: 100% !important;
-    max-height: 96vh !important;
+    height: 96vh !important;
+    max-height: 98vh !important;
+    display: flex !important;
+    flex-direction: column !important;
   }
   .roi-modal-body {
-    padding: 10px 12px;
-    gap: 10px;
+    padding: 8px 10px !important;
+    gap: 8px !important;
+    flex: 1 1 auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow-y: auto !important;
+    max-height: none !important;
   }
   .roi-toolbar {
-    padding: 10px 12px;
-    gap: 8px;
+    padding: 8px 10px !important;
+    gap: 6px !important;
+    flex-shrink: 0 !important;
   }
-  .roi-presets-bar, .roi-motion-bar {
-    gap: 6px;
-    flex-wrap: wrap;
+  .roi-presets-bar, .roi-motion-bar, .roi-nudge-bar {
+    gap: 5px !important;
+    flex-wrap: wrap !important;
   }
-  .btn-preset-pill, .btn-motion-pill {
-    padding: 5px 10px;
-    font-size: 0.74rem;
-    min-height: 34px;
+  .btn-preset-pill, .btn-motion-pill, .btn-nudge-pill {
+    padding: 5px 8px !important;
+    font-size: 0.72rem !important;
+    min-height: 32px !important;
+  }
+  .roi-instructions {
+    font-size: 0.72rem !important;
+    padding: 6px 10px !important;
+    flex-shrink: 0 !important;
   }
   .roi-viewport-container {
-    max-height: 48vh !important;
+    flex: 1 1 auto !important;
+    min-height: 200px !important;
+    max-height: none !important;
+    height: auto !important;
   }
+  .roi-media-viewport {
+    flex: 1 1 auto !important;
+    min-height: 180px !important;
+    padding: 4px !important;
+  }
+  .roi-media-wrapper {
+    max-width: 100% !important;
+    max-height: 100% !important;
+  }
+  #roiPreviewImg,
+  #roiPreviewVideo {
+    max-width: 100% !important;
+    max-height: 100% !important;
+  }
+  .modal-overlay {
+    z-index: 9999 !important;
+  }
+
   .roi-footer-bar {
     flex-direction: column !important;
     align-items: stretch !important;
-    gap: 10px !important;
+    gap: 8px !important;
+    padding-top: 8px !important;
+    flex-shrink: 0 !important;
+    position: sticky !important;
+    bottom: 0 !important;
+    background: #030712 !important;
+    z-index: 50 !important;
   }
   .roi-actions {
     width: 100% !important;
@@ -2612,13 +2714,16 @@ progress::-moz-progress-bar {
   }
   .roi-actions button {
     flex: 1 !important;
-    min-height: 44px !important;
+    min-height: 42px !important;
     justify-content: center !important;
   }
 
   /* Sticky Mobile Bar */
   .mobile-sticky-bar {
     padding: 10px 14px max(10px, env(safe-area-inset-bottom, 12px)) !important;
+  }
+  body:has(.modal-overlay.open) .mobile-sticky-bar {
+    display: none !important;
   }
   .mobile-btn-action {
     min-height: 44px !important;

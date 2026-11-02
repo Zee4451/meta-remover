@@ -7,7 +7,7 @@
 import { CleanerHub } from './cleaners/cleaner-hub.js?v=13';
 import { SampleGenerator } from './utils/samples.js?v=13';
 import { AIDetector } from './detectors/ai-detector.js?v=13';
-import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=13';
+import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=14';
 
 class App {
   constructor() {
@@ -100,6 +100,12 @@ class App {
     this.roiPresetTl = document.getElementById('roiPresetTl');
     this.roiPresetCenter = document.getElementById('roiPresetCenter');
     this.roiClearBoxes = document.getElementById('roiClearBoxes');
+    this.roiNudgeUp = document.getElementById('roiNudgeUp');
+    this.roiNudgeDown = document.getElementById('roiNudgeDown');
+    this.roiNudgeLeft = document.getElementById('roiNudgeLeft');
+    this.roiNudgeRight = document.getElementById('roiNudgeRight');
+    this.roiNudgeGrow = document.getElementById('roiNudgeGrow');
+    this.roiNudgeShrink = document.getElementById('roiNudgeShrink');
     this.boxSelector = null;
     this.activeRoiItem = null;
     this.activeRoiUrl = null;
@@ -329,6 +335,38 @@ class App {
           this.boxSelector.clearBoxes();
           this.updateRoiBoxCount([]);
         }
+      });
+    }
+
+    // Fine-tune nudge & scale buttons for mobile & precise positioning
+    if (this.roiNudgeUp) {
+      this.roiNudgeUp.addEventListener('click', () => {
+        if (this.boxSelector) this.boxSelector.nudge('up');
+      });
+    }
+    if (this.roiNudgeDown) {
+      this.roiNudgeDown.addEventListener('click', () => {
+        if (this.boxSelector) this.boxSelector.nudge('down');
+      });
+    }
+    if (this.roiNudgeLeft) {
+      this.roiNudgeLeft.addEventListener('click', () => {
+        if (this.boxSelector) this.boxSelector.nudge('left');
+      });
+    }
+    if (this.roiNudgeRight) {
+      this.roiNudgeRight.addEventListener('click', () => {
+        if (this.boxSelector) this.boxSelector.nudge('right');
+      });
+    }
+    if (this.roiNudgeGrow) {
+      this.roiNudgeGrow.addEventListener('click', () => {
+        if (this.boxSelector) this.boxSelector.scale(true);
+      });
+    }
+    if (this.roiNudgeShrink) {
+      this.roiNudgeShrink.addEventListener('click', () => {
+        if (this.boxSelector) this.boxSelector.scale(false);
       });
     }
 
@@ -694,6 +732,12 @@ class App {
     }
 
     this.roiModal.classList.add('open');
+    requestAnimationFrame(() => {
+      if (this.boxSelector) this.boxSelector.syncCanvasSize();
+    });
+    setTimeout(() => {
+      if (this.boxSelector) this.boxSelector.syncCanvasSize();
+    }, 150);
   }
 
   setupRoiScrubber(video) {

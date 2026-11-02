@@ -437,17 +437,28 @@
               <button type="button" class="btn-preset-pill" id="roiPresetCenter">Center Box</button>
               <button type="button" class="btn-preset-pill" id="roiClearBoxes" style="color: var(--accent-rose);">Clear Boxes</button>
             </div>
+            <div class="roi-nudge-bar" id="roiNudgeBar">
+              <span class="roi-bar-lbl">Fine-Tune:</span>
+              <button type="button" class="btn-nudge-pill" id="roiNudgeUp" title="Move Box Up" aria-label="Nudge Up">⬆️ Up</button>
+              <button type="button" class="btn-nudge-pill" id="roiNudgeDown" title="Move Box Down" aria-label="Nudge Down">⬇️ Down</button>
+              <button type="button" class="btn-nudge-pill" id="roiNudgeLeft" title="Move Box Left" aria-label="Nudge Left">⬅️ Left</button>
+              <button type="button" class="btn-nudge-pill" id="roiNudgeRight" title="Move Box Right" aria-label="Nudge Right">➡️ Right</button>
+              <button type="button" class="btn-nudge-pill" id="roiNudgeGrow" title="Enlarge Box" aria-label="Enlarge Box">➕ Grow</button>
+              <button type="button" class="btn-nudge-pill" id="roiNudgeShrink" title="Shrink Box" aria-label="Shrink Box">➖ Shrink</button>
+            </div>
           </div>
 
           <div class="roi-instructions">
-            Drag on the media to draw a custom box around the watermark, or click a corner preset. You can drag and resize boxes directly.
+            Touch or drag to position and resize boxes over watermarks. Use presets or fine-tune arrows for instant pixel-level precision on any phone screen.
           </div>
 
-          <div class="roi-viewport-container">
-            <div class="roi-media-wrapper" id="roiMediaWrapper">
-              <img id="roiPreviewImg" src="" alt="ROI Media Preview" style="display: none;">
-              <video id="roiPreviewVideo" playsinline muted preload="auto" style="display: none;"></video>
-              <canvas id="roiOverlayCanvas"></canvas>
+          <div class="roi-viewport-container" id="roiViewportContainer">
+            <div class="roi-media-viewport" id="roiMediaViewport">
+              <div class="roi-media-wrapper" id="roiMediaWrapper">
+                <img id="roiPreviewImg" src="" alt="ROI Media Preview" style="display: none;">
+                <video id="roiPreviewVideo" playsinline muted preload="auto" style="display: none;"></video>
+                <canvas id="roiOverlayCanvas"></canvas>
+              </div>
             </div>
             <div class="roi-video-scrubber-bar" id="roiScrubberBar" style="display: none;">
               <button type="button" class="btn-video-play" id="roiPlayPauseBtn" aria-label="Play or pause video">▶</button>
@@ -584,6 +595,6 @@
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
   <!-- Application Script -->
-  <script type="module" src="js/app.js?v=13"></script>
+  <script type="module" src="js/app.js?v=14"></script>
 </body>
 </html>

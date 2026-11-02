@@ -13,10 +13,15 @@ export class WatermarkBoxSelector {
 
     // Normalized boxes: [{ id, x, y, w, h, startTime, endTime, trackTemplate }] (0.0 to 1.0)
     this.boxes = [];
+    this.selectedBox = null;
     this.isDrawing = false;
+    this.isMoving = false;
+    this.movingBox = null;
     this.isResizing = false;
     this.resizingBox = null;
+    this.resizeCorner = null; // 'tl', 'tr', 'bl', 'br'
     this.startPt = null;
+    this.origBox = null;
     this.currentDraft = null;
     this.autoTrackEnabled = false;
     this.mode = 'static'; // 'static', 'keyframe', 'autotrack'
@@ -28,17 +33,50 @@ export class WatermarkBoxSelector {
 
     this._bindEvents();
     this.syncCanvasSize();
+
+    // Observe viewport container resize to auto-adapt to mobile rotation/keyboard
+    const viewport = this.media?.closest('.roi-media-viewport') || this.media?.parentElement?.parentElement || this.media?.parentElement;
+    if (viewport && typeof ResizeObserver !== 'undefined') {
+      this._resizeObserver = new ResizeObserver(() => {
+        this.syncCanvasSize();
+      });
+      this._resizeObserver.observe(viewport);
+    }
   }
 
-  // Sync overlay canvas dimensions with the rendered preview size
+  // Sync overlay canvas dimensions with the rendered preview size (ZERO letterbox, 100% visible)
   syncCanvasSize() {
     if (!this.media || !this.canvas) return;
-    const rect = this.media.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      this.canvas.width = Math.round(rect.width);
-      this.canvas.height = Math.round(rect.height);
-      this.render();
-    }
+
+    // 1. Identify viewport boundary
+    const viewport = this.media.closest('.roi-media-viewport') || this.media.parentElement?.parentElement || this.media.parentElement;
+    if (!viewport) return;
+
+    // 2. Measure viewport usable space
+    const vRect = viewport.getBoundingClientRect();
+    const computed = window.getComputedStyle(viewport);
+    const padX = (parseFloat(computed.paddingLeft) || 6) + (parseFloat(computed.paddingRight) || 6);
+    const padY = (parseFloat(computed.paddingTop) || 6) + (parseFloat(computed.paddingBottom) || 6);
+    const availW = Math.max(80, (vRect.width || viewport.clientWidth || 320) - padX);
+    const availH = Math.max(80, (vRect.height || viewport.clientHeight || 240) - padY);
+
+    // 3. Intrinsic media dimensions
+    const natW = this.media.videoWidth || this.media.naturalWidth || 800;
+    const natH = this.media.videoHeight || this.media.naturalHeight || 600;
+
+    // 4. Perfect aspect ratio fit with ZERO letterboxing and 100% full visibility
+    const scale = Math.min(availW / natW, availH / natH, 1.0);
+    const renderW = Math.max(10, Math.round(natW * scale));
+    const renderH = Math.max(10, Math.round(natH * scale));
+
+    this.media.style.width = `${renderW}px`;
+    this.media.style.height = `${renderH}px`;
+    this.canvas.width = renderW;
+    this.canvas.height = renderH;
+    this.canvas.style.width = `${renderW}px`;
+    this.canvas.style.height = `${renderH}px`;
+
+    this.render();
   }
 
   // Load existing normalized boxes into the selector
@@ -53,11 +91,19 @@ export class WatermarkBoxSelector {
       endTime: b.endTime ?? Infinity,
       trackTemplate: b.trackTemplate || null
     }));
+    this.selectedBox = this.boxes.length > 0 ? this.boxes[this.boxes.length - 1] : null;
     this.render();
   }
 
   getBoxes() {
-    return [...this.boxes];
+    return this.boxes.map(b => ({ ...b }));
+  }
+
+  getSelectedBox() {
+    if (this.selectedBox && this.boxes.includes(this.selectedBox)) {
+      return this.selectedBox;
+    }
+    return this.boxes.length > 0 ? this.boxes[this.boxes.length - 1] : null;
   }
 
   setMode(mode) {
@@ -89,6 +135,7 @@ export class WatermarkBoxSelector {
     };
 
     this.boxes.push(newBox);
+    this.selectedBox = newBox;
     this.render();
     if (this.options.onChange) this.options.onChange(this.getBoxes());
     return newBox;
@@ -108,6 +155,7 @@ export class WatermarkBoxSelector {
       trackTemplate: this.autoTrackEnabled ? this._captureEdgeTemplate({ x, y, w, h }) : null
     };
     this.boxes.push(box);
+    this.selectedBox = box;
     this.render();
     if (this.options.onChange) this.options.onChange(this.getBoxes());
     return box;
@@ -115,7 +163,38 @@ export class WatermarkBoxSelector {
 
   clearBoxes() {
     this.boxes = [];
+    this.selectedBox = null;
     this.currentDraft = null;
+    this.render();
+    if (this.options.onChange) this.options.onChange(this.getBoxes());
+  }
+
+  // Fine-tuning nudge controls for mobile screens
+  nudge(direction, step = 0.015) {
+    const box = this.getSelectedBox();
+    if (!box) return;
+    if (direction === 'up') box.y = Math.max(0, box.y - step);
+    if (direction === 'down') box.y = Math.min(1 - box.h, box.y + step);
+    if (direction === 'left') box.x = Math.max(0, box.x - step);
+    if (direction === 'right') box.x = Math.min(1 - box.w, box.x + step);
+    this.selectedBox = box;
+    this.render();
+    if (this.options.onChange) this.options.onChange(this.getBoxes());
+  }
+
+  scale(grow, step = 0.02) {
+    const box = this.getSelectedBox();
+    if (!box) return;
+    if (grow) {
+      const dw = Math.min(step, 1 - box.x - box.w);
+      const dh = Math.min(step, 1 - box.y - box.h);
+      box.w += dw;
+      box.h += dh;
+    } else {
+      box.w = Math.max(0.02, box.w - step);
+      box.h = Math.max(0.02, box.h - step);
+    }
+    this.selectedBox = box;
     this.render();
     if (this.options.onChange) this.options.onChange(this.getBoxes());
   }
@@ -129,12 +208,24 @@ export class WatermarkBoxSelector {
     window.removeEventListener('touchmove', this._onMove);
     window.removeEventListener('touchend', this._onEnd);
     window.removeEventListener('resize', this._onResize);
+
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
   }
 
   _getNormalizedPoint(e) {
     const rect = this.canvas.getBoundingClientRect();
-    const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+    let clientX = e.clientX;
+    let clientY = e.clientY;
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length > 0) {
+      clientX = e.changedTouches[0].clientX;
+      clientY = e.changedTouches[0].clientY;
+    }
     return {
       x: Math.max(0, Math.min(1, (clientX - rect.left) / (rect.width || 1))),
       y: Math.max(0, Math.min(1, (clientY - rect.top) / (rect.height || 1))),
@@ -145,62 +236,126 @@ export class WatermarkBoxSelector {
 
   _handleStart(e) {
     if (e.button && e.button !== 0) return; // Only left mouse button
-    e.preventDefault();
+    if (e.cancelable) e.preventDefault();
     const pt = this._getNormalizedPoint(e);
     const cw = this.canvas.width;
     const ch = this.canvas.height;
+    const px = pt.x * cw;
+    const py = pt.y * ch;
 
-    // Check if user clicked the '×' delete badge on an existing box
-    const hitDeleteIdx = this.boxes.findIndex((b) => {
+    const isTouch = (e.touches && e.touches.length > 0) || ('ontouchstart' in window);
+    const hitRadius = isTouch ? 28 : 14;
+
+    // 1. Check if user clicked the '×' delete badge on an existing box (reverse order for top-most)
+    for (let i = this.boxes.length - 1; i >= 0; i--) {
+      const b = this.boxes[i];
       const delX = (b.x + b.w) * cw;
       const delY = b.y * ch;
-      const mouseX = pt.x * cw;
-      const mouseY = pt.y * ch;
-      const dist = Math.hypot(mouseX - delX, mouseY - delY);
-      return dist <= 14;
-    });
+      if (Math.hypot(px - delX, py - delY) <= hitRadius) {
+        if (this.selectedBox === b) this.selectedBox = null;
+        this.boxes.splice(i, 1);
+        this.render();
+        if (this.options.onChange) this.options.onChange(this.getBoxes());
+        return;
+      }
+    }
 
-    if (hitDeleteIdx !== -1) {
-      this.boxes.splice(hitDeleteIdx, 1);
+    // 2. Check 4-corner resize handles on existing boxes
+    for (let i = this.boxes.length - 1; i >= 0; i--) {
+      const b = this.boxes[i];
+      const corners = [
+        { name: 'br', x: (b.x + b.w) * cw, y: (b.y + b.h) * ch },
+        { name: 'bl', x: b.x * cw,         y: (b.y + b.h) * ch },
+        { name: 'tr', x: (b.x + b.w) * cw, y: b.y * ch },
+        { name: 'tl', x: b.x * cw,         y: b.y * ch }
+      ];
+
+      for (const corner of corners) {
+        if (Math.hypot(px - corner.x, py - corner.y) <= hitRadius) {
+          this.isResizing = true;
+          this.resizingBox = b;
+          this.selectedBox = b;
+          this.resizeCorner = corner.name;
+          this.startPt = pt;
+          this.origBox = { x: b.x, y: b.y, w: b.w, h: b.h };
+          this.render();
+          return;
+        }
+      }
+    }
+
+    // 3. Check if user clicked inside an existing box to MOVE it
+    for (let i = this.boxes.length - 1; i >= 0; i--) {
+      const b = this.boxes[i];
+      if (pt.x >= b.x && pt.x <= (b.x + b.w) && pt.y >= b.y && pt.y <= (b.y + b.h)) {
+        this.isMoving = true;
+        this.movingBox = b;
+        this.selectedBox = b;
+        this.startPt = pt;
+        this.origBox = { x: b.x, y: b.y, w: b.w, h: b.h };
+        this.render();
+        return;
+      }
+    }
+
+    // 4. Clicked outside: start DRAWING a new box
+    this.selectedBox = null;
+    this.isDrawing = true;
+    this.startPt = pt;
+    this.currentDraft = { x: pt.x, y: pt.y, w: 0, h: 0 };
+    this.render();
+  }
+
+  _handleMove(e) {
+    if (this.isResizing && this.resizingBox && this.origBox) {
+      if (e.cancelable) e.preventDefault();
+      const pt = this._getNormalizedPoint(e);
+      const dx = pt.x - this.startPt.x;
+      const dy = pt.y - this.startPt.y;
+      const orig = this.origBox;
+      const box = this.resizingBox;
+
+      if (this.resizeCorner === 'br') {
+        box.w = Math.max(0.02, Math.min(1 - orig.x, orig.w + dx));
+        box.h = Math.max(0.02, Math.min(1 - orig.y, orig.h + dy));
+      } else if (this.resizeCorner === 'bl') {
+        const newX = Math.max(0, Math.min(orig.x + orig.w - 0.02, orig.x + dx));
+        box.w = (orig.x + orig.w) - newX;
+        box.x = newX;
+        box.h = Math.max(0.02, Math.min(1 - orig.y, orig.h + dy));
+      } else if (this.resizeCorner === 'tr') {
+        const newY = Math.max(0, Math.min(orig.y + orig.h - 0.02, orig.y + dy));
+        box.h = (orig.y + orig.h) - newY;
+        box.y = newY;
+        box.w = Math.max(0.02, Math.min(1 - orig.x, orig.w + dx));
+      } else if (this.resizeCorner === 'tl') {
+        const newX = Math.max(0, Math.min(orig.x + orig.w - 0.02, orig.x + dx));
+        const newY = Math.max(0, Math.min(orig.y + orig.h - 0.02, orig.y + dy));
+        box.w = (orig.x + orig.w) - newX;
+        box.h = (orig.y + orig.h) - newY;
+        box.x = newX;
+        box.y = newY;
+      }
+
       this.render();
       if (this.options.onChange) this.options.onChange(this.getBoxes());
       return;
     }
 
-    // Check if user clicked bottom-right resize handle of an existing box
-    const hitResizeIdx = this.boxes.findIndex((b) => {
-      const handleX = (b.x + b.w) * cw;
-      const handleY = (b.y + b.h) * ch;
-      const mouseX = pt.x * cw;
-      const mouseY = pt.y * ch;
-      return Math.hypot(mouseX - handleX, mouseY - handleY) <= 14;
-    });
-
-    if (hitResizeIdx !== -1) {
-      this.isResizing = true;
-      this.resizingBox = this.boxes[hitResizeIdx];
-      this.startPt = pt;
-      return;
-    }
-
-    this.isDrawing = true;
-    this.startPt = pt;
-    this.currentDraft = { x: pt.x, y: pt.y, w: 0, h: 0 };
-  }
-
-  _handleMove(e) {
-    if (this.isResizing && this.resizingBox) {
-      e.preventDefault();
+    if (this.isMoving && this.movingBox && this.origBox) {
+      if (e.cancelable) e.preventDefault();
       const pt = this._getNormalizedPoint(e);
-      this.resizingBox.w = Math.max(0.02, Math.min(1 - this.resizingBox.x, pt.x - this.resizingBox.x));
-      this.resizingBox.h = Math.max(0.02, Math.min(1 - this.resizingBox.y, pt.y - this.resizingBox.y));
+      const dx = pt.x - this.startPt.x;
+      const dy = pt.y - this.startPt.y;
+      this.movingBox.x = Math.max(0, Math.min(1 - this.movingBox.w, this.origBox.x + dx));
+      this.movingBox.y = Math.max(0, Math.min(1 - this.movingBox.h, this.origBox.y + dy));
       this.render();
       if (this.options.onChange) this.options.onChange(this.getBoxes());
       return;
     }
 
     if (!this.isDrawing || !this.startPt) return;
-    e.preventDefault();
+    if (e.cancelable) e.preventDefault();
     const pt = this._getNormalizedPoint(e);
     this.currentDraft = {
       x: Math.min(this.startPt.x, pt.x),
@@ -215,6 +370,16 @@ export class WatermarkBoxSelector {
     if (this.isResizing) {
       this.isResizing = false;
       this.resizingBox = null;
+      this.resizeCorner = null;
+      this.origBox = null;
+      this.render();
+      return;
+    }
+
+    if (this.isMoving) {
+      this.isMoving = false;
+      this.movingBox = null;
+      this.origBox = null;
       this.render();
       return;
     }
@@ -222,7 +387,7 @@ export class WatermarkBoxSelector {
     if (!this.isDrawing) return;
     this.isDrawing = false;
 
-    // Ignore tiny accidental clicks (< 1.5% size)
+    // Ignore tiny accidental taps (< 1.5% size)
     if (this.currentDraft && this.currentDraft.w > 0.015 && this.currentDraft.h > 0.015) {
       const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'box_' + Math.random().toString(36).substring(2, 9);
       const currentTime = this.media.currentTime || 0;
@@ -235,6 +400,7 @@ export class WatermarkBoxSelector {
         trackTemplate: this.autoTrackEnabled ? this._captureEdgeTemplate(this.currentDraft) : null,
       };
       this.boxes.push(newBox);
+      this.selectedBox = newBox;
       if (this.options.onChange) this.options.onChange(this.getBoxes());
     }
     this.currentDraft = null;
@@ -299,10 +465,10 @@ export class WatermarkBoxSelector {
       const rw = b.w * width;
       const rh = b.h * height;
 
-      // In keyframe mode, dim inactive boxes
+      const isSelected = (b === this.selectedBox) || (!this.selectedBox && idx === this.boxes.length - 1 && !this.currentDraft);
       const isKeyframeActive = !b.id || this.mode !== 'keyframe' || (currentTime >= b.startTime && currentTime <= b.endTime);
-      const alpha = isKeyframeActive ? 0.22 : 0.07;
-      const strokeColor = isKeyframeActive ? '#10b981' : 'rgba(16, 185, 129, 0.4)';
+      const alpha = isKeyframeActive ? (isSelected ? 0.28 : 0.18) : 0.07;
+      const strokeColor = isKeyframeActive ? (isSelected ? '#34d399' : '#10b981') : 'rgba(16, 185, 129, 0.4)';
 
       // Translucent emerald fill
       this.ctx.fillStyle = `rgba(16, 185, 129, ${alpha})`;
@@ -310,17 +476,18 @@ export class WatermarkBoxSelector {
 
       // High-contrast dashed neon border
       this.ctx.strokeStyle = strokeColor;
-      this.ctx.lineWidth = 2;
-      this.ctx.setLineDash([6, 3]);
+      this.ctx.lineWidth = isSelected ? 2.5 : 2;
+      this.ctx.setLineDash(isSelected ? [8, 4] : [6, 3]);
       this.ctx.strokeRect(rx, ry, rw, rh);
       this.ctx.setLineDash([]);
 
-      // Label tag + Delete button (for saved boxes)
+      // Label tag + Delete button + Resize handles (for saved boxes)
       if (b.id) {
         const tagText = b.trackTemplate ? `🎯 Track #${idx + 1}` : `ROI #${idx + 1}`;
-        const tagWidth = b.trackTemplate ? 82 : 68;
+        const tagWidth = b.trackTemplate ? 84 : 70;
 
-        this.ctx.fillStyle = '#10b981';
+        // Label pill at top-left
+        this.ctx.fillStyle = isSelected ? '#34d399' : '#10b981';
         this.ctx.fillRect(rx, Math.max(0, ry - 20), tagWidth, 20);
         this.ctx.fillStyle = '#0f172a';
         this.ctx.font = 'bold 11px sans-serif';
@@ -330,7 +497,7 @@ export class WatermarkBoxSelector {
         const delCenterX = rx + rw;
         const delCenterY = ry;
         this.ctx.beginPath();
-        this.ctx.arc(delCenterX, delCenterY, 10, 0, Math.PI * 2);
+        this.ctx.arc(delCenterX, delCenterY, 11, 0, Math.PI * 2);
         this.ctx.fillStyle = '#ef4444';
         this.ctx.fill();
         this.ctx.strokeStyle = '#ffffff';
@@ -338,22 +505,32 @@ export class WatermarkBoxSelector {
         this.ctx.stroke();
 
         this.ctx.fillStyle = '#ffffff';
-        this.ctx.font = 'bold 12px sans-serif';
-        this.ctx.fillText('×', delCenterX - 4, delCenterY + 4);
+        this.ctx.font = 'bold 13px sans-serif';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('×', delCenterX, delCenterY);
+        this.ctx.textAlign = 'start';
+        this.ctx.textBaseline = 'alphabetic';
 
-        // Resize handles (small square anchors at corners)
-        const hSize = 7;
+        // 4 Corner Resize handles (white circular anchors with emerald stroke)
+        const handleRadius = 6;
         const cornerAnchors = [
-          [rx, ry],
-          [rx, ry + rh],
-          [rx + rw, ry + rh] // Bottom-right interactive resize anchor
+          [rx, ry],           // Top-Left
+          [rx + rw, ry],      // Top-Right (underneath delete button)
+          [rx, ry + rh],      // Bottom-Left
+          [rx + rw, ry + rh]  // Bottom-Right
         ];
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.strokeStyle = '#10b981';
-        this.ctx.lineWidth = 1.5;
+
         for (const [hx, hy] of cornerAnchors) {
-          this.ctx.fillRect(hx - hSize / 2, hy - hSize / 2, hSize, hSize);
-          this.ctx.strokeRect(hx - hSize / 2, hy - hSize / 2, hSize, hSize);
+          // Skip drawing handle directly under delete button
+          if (hx === delCenterX && hy === delCenterY) continue;
+          this.ctx.beginPath();
+          this.ctx.arc(hx, hy, handleRadius, 0, Math.PI * 2);
+          this.ctx.fillStyle = '#ffffff';
+          this.ctx.fill();
+          this.ctx.strokeStyle = '#10b981';
+          this.ctx.lineWidth = 2;
+          this.ctx.stroke();
         }
       }
     });
