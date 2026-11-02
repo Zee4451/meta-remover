@@ -65,7 +65,6 @@ export class CanvasCleaner {
             watermarkMetrics = WatermarkRemover.removeCornerWatermark(ctx, width, height, {
               corner,
               customROI,
-              customBoxes: options.customBoxes || null,
               noiseMatching: true,
               sensitivity: options.watermarkSensitivity || 1.0
             });
@@ -124,3 +123,4 @@ export class CanvasCleaner {
     });
   }
 }
+

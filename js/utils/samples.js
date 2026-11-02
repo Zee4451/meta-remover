@@ -6,6 +6,8 @@
  * - AI Video MP4 container with Runway / Sora metadata & UUID boxes
  */
 
+import { SAMPLE_VIDEO_B64 } from './sample-video-fixture.js';
+
 export class SampleGenerator {
   /**
    * Creates a sample PNG with Stable Diffusion & ComfyUI metadata
@@ -156,45 +158,16 @@ export class SampleGenerator {
   }
 
   /**
-   * Creates a sample MP4 video with Runway & C2PA video metadata
+   * Creates an authentic 3.0s H.264 sample MP4 video with Runway, Sora & C2PA video metadata
+   * Decodable by HTML5 video, with positive duration and visible watermark for inpainting tests.
    */
   static async createVideoSample() {
-    // Minimal valid ISOBMFF MP4 file structure
-    // ftyp + moov (with udta & ai tags) + mdat
-    const ftyp = this.createMP4Box('ftyp', new Uint8Array([
-      0x69, 0x73, 0x6F, 0x6D, // isom
-      0x00, 0x00, 0x02, 0x00, // minor version
-      0x69, 0x73, 0x6F, 0x6D, 0x6D, 0x70, 0x34, 0x31 // compatible brands
-    ]));
-
-    // C2PA UUID Box
-    const c2paUUID = new Uint8Array([
-      0xd8, 0xfe, 0xc3, 0xd6, 0x1b, 0x0e, 0x48, 0x3c, 0x92, 0x97, 0x58, 0x28, 0x87, 0x7a, 0xae, 0x48, // C2PA standard UUID
-      ...new TextEncoder().encode('urn:c2pa:RunwayML:Gen-3:claim:OpenAI:Sora:AI-Generated-Video')
-    ]);
-    const uuidBox = this.createMP4Box('uuid', c2paUUID);
-
-    // moov with udta
-    const udtaPayload = new TextEncoder().encode('udta metadata: Generated with Runway Gen-3 Alpha & OpenAI Sora preview. Prompt: drone flying over volcanic Iceland.');
-    const udtaBox = this.createMP4Box('udta', udtaPayload);
-    const mvhdBox = this.createMP4Box('mvhd', new Uint8Array(100)); // dummy mvhd
-    
-    const moovPayload = new Uint8Array(mvhdBox.length + udtaBox.length);
-    moovPayload.set(mvhdBox, 0);
-    moovPayload.set(udtaBox, mvhdBox.length);
-    const moovBox = this.createMP4Box('moov', moovPayload);
-
-    // dummy mdat
-    const mdatBox = this.createMP4Box('mdat', new Uint8Array(256));
-
-    const totalLen = ftyp.length + uuidBox.length + moovBox.length + mdatBox.length;
-    const mp4Bytes = new Uint8Array(totalLen);
-    let cur = 0;
-    mp4Bytes.set(ftyp, cur); cur += ftyp.length;
-    mp4Bytes.set(uuidBox, cur); cur += uuidBox.length;
-    mp4Bytes.set(moovBox, cur); cur += moovBox.length;
-    mp4Bytes.set(mdatBox, cur); cur += mdatBox.length;
-
+    const binStr = atob(SAMPLE_VIDEO_B64);
+    const len = binStr.length;
+    const mp4Bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      mp4Bytes[i] = binStr.charCodeAt(i);
+    }
     return new File([mp4Bytes], 'sample_ai_video_runway.mp4', { type: 'video/mp4' });
   }
 

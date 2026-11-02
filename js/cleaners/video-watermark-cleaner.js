@@ -2,6 +2,7 @@
  * GhostMeta AI - Zero-Stutter 60FPS Video Watermark Cleaner
  * Real-time frame rendering with O(1) Precomputed Inpaint LUT (< 0.8ms per frame)
  * 100% Smooth Native Playback, Zero Dropped Frames, Hardware-Accelerated Bitrate
+ * Production Hardened: Bounded event timeouts, separate MP4/WebM paths, fail-closed validation.
  */
 
 import { MP4Cleaner } from './mp4-cleaner.js';
@@ -233,10 +234,137 @@ export function executeInpaintLUT(data, lut) {
 
 export class VideoWatermarkCleaner {
   /**
+   * Pre-validates a video file with an abortable timeout.
+   * Ensures browser can parse container, dimensions > 0, and duration is finite positive.
+   * Prevents hangs at 18% when corrupted/truncated files are ingested.
+   * 
+   * @param {File|Blob} file 
+   * @param {number} maxWaitMs 
+   * @returns {Promise<{valid: boolean, duration?: number, width?: number, height?: number, error?: string}>}
+   */
+  static async validateMedia(file, maxWaitMs = 8000) {
+    if (typeof document === 'undefined') return { valid: true, duration: 4.0, width: 1920, height: 1080 };
+
+    return new Promise((resolve) => {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'metadata';
+
+      let timer = null;
+      let settled = false;
+      const fileUrl = URL.createObjectURL(file);
+
+      function cleanup(res) {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        v.removeEventListener('loadedmetadata', onLoaded);
+        v.removeEventListener('error', onError);
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+        URL.revokeObjectURL(fileUrl);
+        resolve(res);
+      }
+
+      const onLoaded = () => {
+        const w = v.videoWidth || 0;
+        const h = v.videoHeight || 0;
+        const d = v.duration;
+        if (w === 0 || h === 0) {
+          cleanup({ valid: false, error: 'Video dimensions are 0x0 (unrenderable stream).' });
+        } else if (!Number.isFinite(d) || d <= 0) {
+          cleanup({ valid: false, error: 'Video duration is invalid, zero, or infinite.' });
+        } else {
+          cleanup({ valid: true, width: w, height: h, duration: d });
+        }
+      };
+
+      const onError = () => {
+        const errCode = v.error?.code || 'unknown';
+        const errMsg = v.error?.message || 'Media decode failed';
+        cleanup({ valid: false, error: `HTML5 video decode error (code ${errCode}): ${errMsg}` });
+      };
+
+      v.addEventListener('loadedmetadata', onLoaded, { once: true });
+      v.addEventListener('error', onError, { once: true });
+
+      timer = setTimeout(() => {
+        cleanup({ valid: false, error: `Validation timed out after ${maxWaitMs}ms (video container unparseable).` });
+      }, maxWaitMs);
+
+      v.src = fileUrl;
+    });
+  }
+
+  /**
+   * Post-validates playback of a processed video blob before presenting to user.
+   * Fails closed if the output container cannot be parsed or decoded.
+   * 
+   * @param {Blob} blob 
+   * @param {number} maxWaitMs 
+   * @returns {Promise<{valid: boolean, duration?: number, error?: string}>}
+   */
+  static async validateBlobPlayback(blob, maxWaitMs = 6000) {
+    if (typeof document === 'undefined') return { valid: true };
+
+    return new Promise((resolve) => {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'metadata';
+
+      let timer = null;
+      let settled = false;
+      const url = URL.createObjectURL(blob);
+
+      function cleanup(res) {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        v.removeEventListener('loadedmetadata', onLoaded);
+        v.removeEventListener('error', onError);
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+        URL.revokeObjectURL(url);
+        resolve(res);
+      }
+
+      const onLoaded = () => {
+        const d = v.duration;
+        const w = v.videoWidth || 0;
+        const h = v.videoHeight || 0;
+        if (w === 0 || h === 0) {
+          cleanup({ valid: false, error: 'Output video has zero dimensions.' });
+        } else if (!Number.isFinite(d) || d <= 0) {
+          cleanup({ valid: false, error: 'Output video has zero or non-finite duration.' });
+        } else {
+          cleanup({ valid: true, duration: d, width: w, height: h });
+        }
+      };
+
+      const onError = () => {
+        cleanup({ valid: false, error: `Output playback failed: ${v.error?.message || 'cannot decode'}` });
+      };
+
+      v.addEventListener('loadedmetadata', onLoaded, { once: true });
+      v.addEventListener('error', onError, { once: true });
+
+      timer = setTimeout(() => {
+        cleanup({ valid: false, error: `Output validation timed out (${maxWaitMs}ms).` });
+      }, maxWaitMs);
+
+      v.src = url;
+    });
+  }
+
+  /**
    * Cleans video container metadata and optionally inpaints corner watermarks in real-time
    * @param {File|Blob} file 
    * @param {Object} options 
-   * @returns {Promise<Blob>} Cleaned video Blob
+   * @returns {Promise<Object>} { blob: Blob, watermarkMetrics: Object|null, outputDescriptor?: Object }
    */
   static async clean(file, options = {}) {
     const originalBuffer = await file.arrayBuffer();
@@ -250,14 +378,32 @@ export class VideoWatermarkCleaner {
       return { blob: containerCleanedBlob, watermarkMetrics: null };
     }
 
-    // 2. High-Bitrate Zero-Stutter Real-Time Video Watermark Inpainting
-    return new Promise((resolve) => {
-      let isAborted = false;
-      let isFinished = false;
+    // Phase 1: Pre-validation to avoid hangs at 18% on truncated or broken fixtures
+    if (options.onProgress) options.onProgress(19, 'Validating video stream & decoding capabilities...');
+    const preVal = await this.validateMedia(file, 8000);
+    if (!preVal.valid) {
+      console.warn('[VideoCleaner] Pre-validation failed:', preVal.error);
+      throw new Error(`Video validation failed: ${preVal.error}. Processing halted to prevent stalls.`);
+    }
+
+    const nativeWidth = preVal.width || 1920;
+    const nativeHeight = preVal.height || 1080;
+    const nativeDuration = preVal.duration || 4.0;
+
+    // Phase 2: High-Bitrate Zero-Stutter Real-Time Video Watermark Inpainting
+    return new Promise((resolve, reject) => {
+      let isSettled = false;
       let animHandle = null;
       let audioCtx = null;
+      let mediaRecorder = null;
+      let captureStreamObj = null;
+
+      const log = (msg, extra = {}) => {
+        console.log(`[VideoCleaner] ${msg}`, Object.keys(extra).length ? extra : '');
+      };
 
       const sourceHasAudio = MP4Cleaner.hasAudioTrack(originalBuffer);
+      log('Source audio track detection', { sourceHasAudio });
 
       const video = document.createElement('video');
       video.muted = true;
@@ -265,13 +411,11 @@ export class VideoWatermarkCleaner {
       video.preload = 'auto';
 
       const fileUrl = URL.createObjectURL(file);
-      video.src = fileUrl;
 
-      // Timeout safeguard: dynamic timeout based on duration
+      // Bounded total safety timeout: duration * 2.5 + 20s
       let safetyTimeout = null;
 
       function cleanup() {
-        isAborted = true;
         if (animHandle) {
           if ('cancelVideoFrameCallback' in video) {
             try { video.cancelVideoFrameCallback(animHandle); } catch {}
@@ -280,6 +424,14 @@ export class VideoWatermarkCleaner {
           animHandle = null;
         }
         if (safetyTimeout) clearTimeout(safetyTimeout);
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          try { mediaRecorder.stop(); } catch {}
+        }
+        if (captureStreamObj) {
+          try {
+            captureStreamObj.getTracks().forEach(t => t.stop());
+          } catch {}
+        }
         if (audioCtx && audioCtx.state !== 'closed') {
           try { audioCtx.close(); } catch {}
           audioCtx = null;
@@ -290,37 +442,68 @@ export class VideoWatermarkCleaner {
         video.load();
       }
 
-      video.onloadedmetadata = async () => {
-        try {
-          const width = video.videoWidth || 1920;
-          const height = video.videoHeight || 1080;
+      function settle(result, err = null) {
+        if (isSettled) return;
+        isSettled = true;
+        cleanup();
+        if (err) {
+          reject(err);
+        } else {
+          resolve(result);
+        }
+      }
 
-          // Ensure valid finite duration > 0
-          let duration = video.duration;
-          if (!Number.isFinite(duration) || duration <= 0 || duration === Infinity) {
-            duration = await new Promise((res) => {
-              const onDuration = () => {
-                if (Number.isFinite(video.duration) && video.duration > 0 && video.duration !== Infinity) {
-                  video.removeEventListener('durationchange', onDuration);
-                  res(video.duration);
-                }
-              };
-              video.addEventListener('durationchange', onDuration);
-              video.currentTime = 1e101;
-              setTimeout(() => {
-                video.currentTime = 0;
-                res(Number.isFinite(video.duration) && video.duration > 0 && video.duration !== Infinity ? video.duration : 4.0);
-              }, 300);
-            });
-          }
+      const totalTimeoutMs = Math.max(45000, Math.round(nativeDuration * 2500 + 20000));
+      safetyTimeout = setTimeout(() => {
+        log('Overall inpainting safety timeout fired', { timeoutMs: totalTimeoutMs });
+        settle({ blob: containerCleanedBlob, watermarkMetrics: null });
+      }, totalTimeoutMs);
 
-          // Safety timeout: generous real-time budget (duration * 2 + 30s)
-          const timeoutMs = Math.max(90000, Math.round(duration * 2000 + 30000));
-          safetyTimeout = setTimeout(() => {
-            isAborted = true;
-            cleanup();
-            resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
+      // Abortable event wait helper
+      function waitForVideoEvent(elem, eventName, timeoutMs) {
+        return new Promise((res, rej) => {
+          let timer = null;
+          const onOk = (e) => {
+            if (timer) clearTimeout(timer);
+            elem.removeEventListener(eventName, onOk);
+            elem.removeEventListener('error', onErr);
+            res(e);
+          };
+          const onErr = () => {
+            if (timer) clearTimeout(timer);
+            elem.removeEventListener(eventName, onOk);
+            elem.removeEventListener('error', onErr);
+            rej(new Error(`Error waiting for ${eventName}: ${elem.error?.message || 'media error'}`));
+          };
+          timer = setTimeout(() => {
+            elem.removeEventListener(eventName, onOk);
+            elem.removeEventListener('error', onErr);
+            rej(new Error(`Timeout waiting for ${eventName} after ${timeoutMs}ms`));
           }, timeoutMs);
+          elem.addEventListener(eventName, onOk, { once: true });
+          elem.addEventListener('error', onErr, { once: true });
+        });
+      }
+
+      // Main inpainting workflow
+      (async () => {
+        try {
+          if (options.onProgress) options.onProgress(24, 'Mounting video element & reading frame headers...');
+
+          // Attach error listener before assigning src
+          video.addEventListener('error', () => {
+            log('Video element error event', { code: video.error?.code, msg: video.error?.message });
+            settle({ blob: containerCleanedBlob, watermarkMetrics: null });
+          }, { once: true });
+
+          video.src = fileUrl;
+          await waitForVideoEvent(video, 'loadedmetadata', 8000);
+
+          const width = video.videoWidth || nativeWidth;
+          const height = video.videoHeight || nativeHeight;
+          const duration = (Number.isFinite(video.duration) && video.duration > 0) ? video.duration : nativeDuration;
+
+          log('Video metadata loaded', { width, height, duration, readyState: video.readyState });
 
           const canvas = document.createElement('canvas');
           canvas.width = width;
@@ -331,14 +514,16 @@ export class VideoWatermarkCleaner {
             colorSpace: 'srgb'
           });
           if (!ctx) {
-            cleanup();
-            return resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
+            log('Canvas 2D context unavailable, falling back');
+            return settle({ blob: containerCleanedBlob, watermarkMetrics: null });
           }
           ctx.imageSmoothingEnabled = false;
 
           // =========================================================================
           // PHASE 1: PRECOMPUTE INPAINT LOOKUP TABLE (LUT) BEFORE RECORDING STARTS!
           // =========================================================================
+          if (options.onProgress) options.onProgress(30, 'Analyzing frames & precomputing watermark LUT...');
+
           let hasWatermark = false;
           let firstFrameMetrics = null;
           let cornerLUT = null;
@@ -348,7 +533,6 @@ export class VideoWatermarkCleaner {
           if (options.customBoxes && options.customBoxes.length > 0) {
             hasWatermark = true;
             const pad = 8;
-            // Precompute LUT for each custom bounding box with an 8px clean border ring
             for (const box of options.customBoxes) {
               const bx = Math.max(0, Math.round(box.x * width));
               const by = Math.max(0, Math.round(box.y * height));
@@ -365,8 +549,6 @@ export class VideoWatermarkCleaner {
               const innerEndX = Math.min(extW, innerStartX + bw);
               const innerEndY = Math.min(extH, innerStartY + bh);
 
-              // 100% of inner box pixels are marked as mask = 1
-              // The 8px border ring remains 0 (clean reference pixels)
               const boxMask = new Uint8Array(extW * extH);
               for (let y = innerStartY; y < innerEndY; y++) {
                 for (let x = innerStartX; x < innerEndX; x++) {
@@ -383,18 +565,12 @@ export class VideoWatermarkCleaner {
               });
             }
 
-            // Extract real before/after thumbnails and mathematical pixel diff from sample frame
             const targetB = compiledBoxes[0];
             const sampleTime = Math.min(0.5, Math.max(0.1, targetB.startTime || 0.1));
-            await new Promise((r) => {
-              const onSeek = () => {
-                video.removeEventListener('seeked', onSeek);
-                r();
-              };
-              video.addEventListener('seeked', onSeek);
+            try {
               video.currentTime = Math.min(duration * 0.5, sampleTime);
-              setTimeout(onSeek, 200);
-            });
+              await waitForVideoEvent(video, 'seeked', 1200);
+            } catch {}
 
             ctx.drawImage(video, 0, 0, width, height);
             const bDataBefore = ctx.getImageData(targetB.roi.x, targetB.roi.y, targetB.roi.w, targetB.roi.h);
@@ -417,6 +593,7 @@ export class VideoWatermarkCleaner {
 
             firstFrameMetrics = {
               watermarkDetected: true,
+              inpaintType: 'user-selected',
               pixelsInpainted: compiledBoxes.reduce((acc, b) => acc + b.lut.count, 0),
               pixelDiff: meanPixelDiff,
               roi: targetB.roi,
@@ -425,7 +602,6 @@ export class VideoWatermarkCleaner {
             };
           } else {
             // Multi-Frame Temporal Persistence Sampling
-            // Samples up to 3 frames across the video to isolate persistent static AI watermarks
             const sampleTimes = [
               Math.min(0.5, Math.max(0.1, duration * 0.1)),
               Math.min(2.0, Math.max(0.3, duration * 0.35)),
@@ -435,21 +611,16 @@ export class VideoWatermarkCleaner {
 
             for (const sTime of sampleTimes) {
               if (sTime >= duration) continue;
-              await new Promise((r) => {
-                const onSeek = () => {
-                  video.removeEventListener('seeked', onSeek);
-                  r();
-                };
-                video.addEventListener('seeked', onSeek);
+              try {
                 video.currentTime = sTime;
-                setTimeout(onSeek, 200);
-              });
+                await waitForVideoEvent(video, 'seeked', 1200);
+              } catch {}
 
               ctx.drawImage(video, 0, 0, width, height);
               const cornerData = ctx.getImageData(roi.x, roi.y, roi.w, roi.h);
               const detection = WatermarkRemover.detectWatermarkMask(cornerData.data, roi.w, roi.h, options.watermarkSensitivity || 1.0);
 
-              if (detection.hasWatermark && detection.count >= 8) {
+              if (detection.hasWatermark && detection.count >= 10) {
                 detectedDetections.push({
                   mask: detection.mask,
                   count: detection.count,
@@ -462,16 +633,14 @@ export class VideoWatermarkCleaner {
             let effectiveWatermarkMask = null;
             let sampleCornerData = null;
 
-            // Prioritize stationary 4-point star watermark (Gemini / Veo) if detected in sample frames
-            const starDetection = detectedDetections.find(d => d.star && d.star.score >= 14.0);
+            const starDetection = detectedDetections.find(d => d.star && d.star.score >= 12.0);
             if (starDetection) {
               effectiveWatermarkMask = starDetection.mask;
               sampleCornerData = starDetection.cornerData;
-            } else if (detectedDetections.length === 1) {
+            } else if (detectedDetections.length === 1 && detectedDetections[0].count >= 14) {
               effectiveWatermarkMask = detectedDetections[0].mask;
               sampleCornerData = detectedDetections[0].cornerData;
             } else if (detectedDetections.length > 1) {
-              // Temporal Intersection: pixels present in >= 2 sample frames are guaranteed to be the AI watermark
               const totalPixels = roi.w * roi.h;
               const votes = new Uint8Array(totalPixels);
               for (const d of detectedDetections) {
@@ -488,11 +657,8 @@ export class VideoWatermarkCleaner {
                   vCount++;
                 }
               }
-              if (vCount >= 8) {
+              if (vCount >= 10) {
                 effectiveWatermarkMask = voted;
-                sampleCornerData = detectedDetections[0].cornerData;
-              } else {
-                effectiveWatermarkMask = detectedDetections[0].mask;
                 sampleCornerData = detectedDetections[0].cornerData;
               }
             }
@@ -504,7 +670,6 @@ export class VideoWatermarkCleaner {
               const dilatedMask = WatermarkRemover.dilateMask(effectiveWatermarkMask, roi.w, roi.h, 4);
               cornerLUT = compileInpaintLUT(dilatedMask, roi.w, roi.h, 8);
 
-              // Quick snapshot of healed corner
               executeInpaintLUT(sampleCornerData.data, cornerLUT);
               const afterThumb = WatermarkRemover.createThumbnailFromData(sampleCornerData, roi.w, roi.h);
 
@@ -520,6 +685,7 @@ export class VideoWatermarkCleaner {
 
               firstFrameMetrics = {
                 watermarkDetected: true,
+                inpaintType: 'auto-gemini',
                 pixelsInpainted: cornerLUT.count,
                 pixelDiff: meanPixelDiff,
                 roi,
@@ -529,22 +695,18 @@ export class VideoWatermarkCleaner {
             }
           }
 
-          // If no watermark detected anywhere on sample frames and no custom boxes were specified:
+          // If no authentic watermark was detected and no custom boxes were specified:
+          // Return lossless container clean directly (0% re-encoding, zero quality loss)
           if (!hasWatermark && compiledBoxes.length === 0) {
-            cleanup();
-            return resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
+            log('No watermark detected on sample frames, returning lossless container clean');
+            return settle({ blob: containerCleanedBlob, watermarkMetrics: null });
           }
 
-          // Warm up: Seek back to frame 0 and prepare canvas for real-time play
-          await new Promise((r) => {
-            const onSeekZero = () => {
-              video.removeEventListener('seeked', onSeekZero);
-              r();
-            };
-            video.addEventListener('seeked', onSeekZero);
+          // Warm up: seek back to 0
+          try {
             video.currentTime = 0;
-            setTimeout(onSeekZero, 200);
-          });
+            await waitForVideoEvent(video, 'seeked', 1200);
+          } catch {}
 
           ctx.drawImage(video, 0, 0, width, height);
           if (cornerLUT) {
@@ -556,10 +718,12 @@ export class VideoWatermarkCleaner {
           // =========================================================================
           // PHASE 2: ZERO-STUTTER REAL-TIME RECORDING (NEVER SEEK INSIDE RECORDER!)
           // =========================================================================
-          // Smooth 30 FPS stream for buttery playback
-          const stream = canvas.captureStream ? canvas.captureStream(30) : canvas.captureStream();
+          if (options.onProgress) options.onProgress(38, 'Starting high-bitrate frame recording...');
 
-          // Pipe audio track from video element if present so audio is 100% preserved
+          captureStreamObj = canvas.captureStream ? canvas.captureStream(30) : canvas.captureStream();
+          const stream = captureStreamObj;
+
+          // Route audio if source contains audio track
           if (sourceHasAudio) {
             try {
               const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
@@ -568,31 +732,24 @@ export class VideoWatermarkCleaner {
                 const audioSource = audioCtx.createMediaElementSource(video);
                 const audioDest = audioCtx.createMediaStreamDestination();
                 audioSource.connect(audioDest);
-                // Connected ONLY to audioDest (NOT to audioCtx.destination),
-                // so user speakers stay 100% silent while audio is cleanly captured
+                // Connected ONLY to audioDest (NOT to audioCtx.destination) -> user speakers stay silent
                 const aTracks = audioDest.stream.getAudioTracks();
                 if (aTracks && aTracks.length > 0) {
                   stream.addTrack(aTracks[0]);
-                  video.muted = false; // Unmute video element so WebAudio receives audio frames
                 }
               }
             } catch (aErr) {
-              console.warn('Audio capture setup warning:', aErr);
+              log('Audio capture setup notice:', { message: aErr.message });
             }
           }
 
           const hasAudio = stream.getAudioTracks().length > 0;
-
-          // Hardware-accelerated smooth bitrate (preserves ~20 MB file size without compression loss)
           const targetBitrate = getRealtimeVideoBitrate(file.size, duration, 2.5, 20_000_000, 45_000_000);
 
-          // Codec Hierarchy - Select candidate MIME based on whether audio track is actually present!
-          // If video has no audio (e.g. AI generated video from Google Flow / Veo / Gemini),
-          // requesting an AAC audio codec (mp4a.40.2) causes MediaRecorder in Chromium to stall or emit 0 chunks!
           const preferredMimesWithAudio = [
-            'video/mp4;codecs="avc1.640028,mp4a.40.2"', // High Profile Level 4.0 + AAC
-            'video/mp4;codecs="avc1.4d4028,mp4a.40.2"', // Main Profile Level 4.0 + AAC
-            'video/mp4;codecs="avc1.42E01F,mp4a.40.2"', // Constrained Baseline Level 3.1 + AAC
+            'video/mp4;codecs="avc1.640028,mp4a.40.2"',
+            'video/mp4;codecs="avc1.4d4028,mp4a.40.2"',
+            'video/mp4;codecs="avc1.42E01F,mp4a.40.2"',
             'video/mp4;codecs=avc1,mp4a.40.2',
             'video/mp4',
             'video/webm;codecs="vp9,opus"',
@@ -612,6 +769,8 @@ export class VideoWatermarkCleaner {
           const candidateMimes = hasAudio ? preferredMimesWithAudio : preferredMimesVideoOnly;
           const selectedMime = candidateMimes.find((m) => MediaRecorder.isTypeSupported(m)) || (hasAudio ? 'video/mp4' : 'video/webm');
 
+          log('Selected recorder MIME', { selectedMime, hasAudio, bitrate: targetBitrate });
+
           const recorderOptions = {
             mimeType: selectedMime,
             videoBitsPerSecond: targetBitrate
@@ -620,83 +779,111 @@ export class VideoWatermarkCleaner {
             recorderOptions.audioBitsPerSecond = 320_000;
           }
 
-          const recorder = new MediaRecorder(stream, recorderOptions);
-
+          mediaRecorder = new MediaRecorder(stream, recorderOptions);
           const chunks = [];
-          recorder.ondataavailable = (e) => {
+          mediaRecorder.ondataavailable = (e) => {
             if (e.data && e.data.size > 0) chunks.push(e.data);
           };
 
-          recorder.onstop = async () => {
-            isFinished = true;
-            cleanup();
+          // Separate container handling on recorder stop
+          mediaRecorder.onstop = async () => {
+            log('MediaRecorder onstop fired', { chunks: chunks.length });
             if (chunks.length > 0 && hasWatermark) {
-              const cleanMime = selectedMime.split(';')[0].trim() || 'video/mp4';
-              const rawBlob = new Blob(chunks, { type: cleanMime });
+              const rawBlob = new Blob(chunks, { type: selectedMime });
               try {
                 const rawBuffer = await rawBlob.arrayBuffer();
-                let scrubbedBytes = cleanMime.includes('mp4') ? MP4Cleaner.clean(rawBuffer) : new Uint8Array(rawBuffer);
+                const magic = new Uint8Array(rawBuffer.slice(0, 16));
 
-                // Patch duration in container headers (mvhd, tkhd, mdhd, mehd for MP4; 0x4489 for WebM)
-                // This resolves the 00:00:00 duration bug on Instagram, iOS, Android, and QuickTime!
-                const finalDuration = (Number.isFinite(duration) && duration > 0) ? duration : 4.0;
-                if (cleanMime.includes('mp4')) {
-                  scrubbedBytes = MP4Cleaner.patchDuration(scrubbedBytes, finalDuration);
-                } else if (cleanMime.includes('webm')) {
-                  scrubbedBytes = WebMCleaner.patchDuration(scrubbedBytes, finalDuration);
+                // Determine container from actual byte signatures
+                const isMp4 = (magic.length >= 8 && magic[4] === 0x66 && magic[5] === 0x74 && magic[6] === 0x79 && magic[7] === 0x70);
+                const isWebm = (magic.length >= 4 && magic[0] === 0x1A && magic[1] === 0x45 && magic[2] === 0xDF && magic[3] === 0xA3);
+
+                log('Container signature inspection', { isMp4, isWebm, totalBytes: rawBuffer.byteLength });
+
+                let processedBytes;
+                let cleanMime = 'video/mp4';
+                let extension = '.mp4';
+
+                if (isMp4) {
+                  // MP4 separate pipeline: clean atoms + patch mvhd/tkhd/mdhd duration
+                  const scrubbed = MP4Cleaner.clean(rawBuffer);
+                  processedBytes = MP4Cleaner.patchDuration(scrubbed, duration);
+                  cleanMime = 'video/mp4';
+                  extension = '.mp4';
+                } else if (isWebm) {
+                  // WebM separate pipeline: NEVER pass WebM to MP4Cleaner!
+                  processedBytes = WebMCleaner.patchDuration(rawBuffer, duration);
+                  cleanMime = 'video/webm';
+                  extension = '.webm';
+                } else {
+                  processedBytes = new Uint8Array(rawBuffer);
+                  cleanMime = selectedMime.split(';')[0].trim() || 'video/mp4';
+                  extension = cleanMime.includes('webm') ? '.webm' : '.mp4';
                 }
 
-                const cleanedVideoBlob = new Blob([scrubbedBytes], { type: cleanMime });
-                resolve({
+                const cleanedVideoBlob = new Blob([processedBytes], { type: cleanMime });
+
+                // Independent validation: verify output can be decoded and has finite positive duration
+                if (options.onProgress) options.onProgress(98, 'Validating final container decodability & duration...');
+                const postVal = await VideoWatermarkCleaner.validateBlobPlayback(cleanedVideoBlob, 6000);
+                if (!postVal.valid) {
+                  log('Post-validation check failed on output container, falling back to lossless container clean', { error: postVal.error });
+                  return settle({
+                    blob: containerCleanedBlob,
+                    watermarkMetrics: null,
+                    validationWarning: `Output container validation failed: ${postVal.error}. Reverted to lossless container clean.`
+                  });
+                }
+
+                log('Post-validation successful', { outputDuration: postVal.duration, outputBytes: cleanedVideoBlob.size });
+
+                settle({
                   blob: cleanedVideoBlob,
                   watermarkMetrics: {
                     ...(firstFrameMetrics || {}),
                     watermarkDetected: true,
                     pixelsInpainted: firstFrameMetrics?.pixelsInpainted || 120,
-                    inpaintType: 'video-frame-inpaint'
+                    inpaintType: options.customBoxes ? 'user-selected' : 'auto-gemini'
+                  },
+                  outputDescriptor: {
+                    container: isMp4 ? 'mp4' : (isWebm ? 'webm' : 'unknown'),
+                    mime: cleanMime,
+                    extension: extension,
+                    duration: postVal.duration || duration
                   }
                 });
-              } catch (err) {
-                console.warn('Post-process duration patch error, returning raw blob:', err);
-                resolve({
-                  blob: rawBlob,
-                  watermarkMetrics: {
-                    ...(firstFrameMetrics || {}),
-                    watermarkDetected: true,
-                    pixelsInpainted: firstFrameMetrics?.pixelsInpainted || 120,
-                    inpaintType: 'video-frame-inpaint'
-                  }
-                });
+              } catch (postErr) {
+                log('Post-process duration repair error, falling back', { err: postErr.message });
+                settle({ blob: rawBlob, watermarkMetrics: firstFrameMetrics });
               }
             } else {
-              resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
+              settle({ blob: containerCleanedBlob, watermarkMetrics: null });
             }
           };
 
-          recorder.start(100);
+          mediaRecorder.start(100);
 
           let lastRenderedTime = -1;
+          let isFinishing = false;
 
           const finishRecording = () => {
-            if (isFinished) return;
-            isFinished = true;
+            if (isFinishing) return;
+            isFinishing = true;
             video.removeEventListener('ended', finishRecording);
             video.pause();
-            if (options.onProgress) options.onProgress(98, 'Finalizing video stream...');
+            if (options.onProgress) options.onProgress(97, 'Finalizing video stream...');
             setTimeout(() => {
-              if (recorder.state !== 'inactive') {
-                recorder.stop();
+              if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                try { mediaRecorder.stop(); } catch {}
               }
-            }, 150);
+            }, 100);
           };
 
           video.addEventListener('ended', finishRecording);
 
-          // Real-time render loop: updates frame and applies < 0.8ms LUT without any seeking
           const renderLoop = () => {
-            if (isAborted || isFinished) return;
+            if (isSettled || isFinishing) return;
 
-            // Video completion check
             if (video.ended || (duration > 0 && video.currentTime >= duration - 0.04)) {
               finishRecording();
               return;
@@ -705,10 +892,8 @@ export class VideoWatermarkCleaner {
             if (video.currentTime !== lastRenderedTime) {
               lastRenderedTime = video.currentTime;
 
-              // 1. Draw video frame at native resolution
               ctx.drawImage(video, 0, 0, width, height);
 
-              // 2. Apply O(1) Precomputed LUT (< 0.5ms!)
               if (cornerLUT) {
                 const rData = ctx.getImageData(roi.x, roi.y, roi.w, roi.h);
                 executeInpaintLUT(rData.data, cornerLUT);
@@ -723,10 +908,9 @@ export class VideoWatermarkCleaner {
                 }
               }
 
-              // 3. Live UI progress update
-              if (!isAborted && !isFinished && options.onProgress && duration > 0) {
-                const pct = Math.min(97, Math.max(5, Math.round((video.currentTime / duration) * 100)));
-                options.onProgress(pct, `Inpainting video in real-time (${video.currentTime.toFixed(1)}s / ${duration.toFixed(1)}s)...`);
+              if (!isSettled && !isFinishing && options.onProgress && duration > 0) {
+                const pct = Math.min(96, Math.max(40, Math.round(40 + (video.currentTime / duration) * 56)));
+                options.onProgress(pct, `Inpainting video frame (${video.currentTime.toFixed(1)}s / ${duration.toFixed(1)}s, ${pct}%)...`);
               }
             }
 
@@ -737,7 +921,7 @@ export class VideoWatermarkCleaner {
             }
           };
 
-          // Start normal 1.0x playback smoothly
+          // Start normal playback smoothly with muted fallback
           try {
             await video.play();
             if ('requestVideoFrameCallback' in video) {
@@ -746,20 +930,25 @@ export class VideoWatermarkCleaner {
               animHandle = requestAnimationFrame(renderLoop);
             }
           } catch (playErr) {
-            console.warn('video.play() failed:', playErr);
-            cleanup();
-            resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
+            log('video.play() failed initially, retrying with muted=true', { err: playErr.message });
+            video.muted = true;
+            try {
+              await video.play();
+              if ('requestVideoFrameCallback' in video) {
+                animHandle = video.requestVideoFrameCallback(renderLoop);
+              } else {
+                animHandle = requestAnimationFrame(renderLoop);
+              }
+            } catch (retryErr) {
+              log('video.play() completely failed, aborting', { err: retryErr.message });
+              settle({ blob: containerCleanedBlob, watermarkMetrics: null });
+            }
           }
-        } catch {
-          cleanup();
-          resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
+        } catch (innerErr) {
+          log('VideoWatermarkCleaner error inside pipeline', { err: innerErr.message });
+          settle({ blob: containerCleanedBlob, watermarkMetrics: null });
         }
-      };
-
-      video.onerror = () => {
-        cleanup();
-        resolve({ blob: containerCleanedBlob, watermarkMetrics: null });
-      };
+      })();
     });
   }
 }

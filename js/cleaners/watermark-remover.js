@@ -115,7 +115,7 @@ export class WatermarkRemover {
       }
     }
 
-    if ((!hasWatermark && effectiveCount < 8) || effectiveCount < 6) {
+    if (!hasWatermark || effectiveCount < 10) {
       // Zero false positives: if no authentic watermark signature is found, touch 0 pixels!
       return {
         watermarkDetected: false,
@@ -479,12 +479,11 @@ export class WatermarkRemover {
         const delta = l - bg;
 
         // Gemini sparkle & badge watermark characteristics:
-        // - Bright/translucent highlight relative to local perimeter background (delta > threshDelta, low chroma, luminance > 55)
-        // - Or contrast edge deviation (Math.abs(delta) > threshDelta * 1.3, low chroma, luminance > 40)
-        // - Or specular star core (l > 120 with low chroma saturation and positive delta)
-        const isBrightDeviation = (delta > threshDelta && s < 68 && l > 55) ||
-                                  (Math.abs(delta) > threshDelta * 1.3 && s < 50 && l > 40);
-        const isSpecularCore = (l > 120 && s < 50 && delta > 4) || (l > 185 && s < 55);
+        // Must exhibit significant contrast delta from local perimeter surround
+        // Never trigger on uniform white/bright clean backgrounds (delta must be positive and substantial)
+        const isBrightDeviation = (delta > Math.max(10, threshDelta) && s < 60 && l > 50) ||
+                                  (delta > Math.max(14, threshDelta * 1.4) && s < 65 && l > 40);
+        const isSpecularCore = (l > 140 && s < 45 && delta > 8);
 
         if (isBrightDeviation || isSpecularCore) {
           mask[idx] = 1;
@@ -493,7 +492,7 @@ export class WatermarkRemover {
       }
     }
 
-    if (count < 8) {
+    if (count < 10) {
       return { mask, count: 0, hasWatermark: false };
     }
 
@@ -547,18 +546,32 @@ export class WatermarkRemover {
       const size = c.pixels.length;
 
       // Discard small noise specks and huge sprawling edges
-      if (size < 8 || size > 3000) continue;
+      if (size < 12 || size > 2500) continue;
       if (bw > maxSpanW || bh > maxSpanH) continue; // Sprawls across >55% of ROI is an object/edge!
 
       let peakLum = 0;
       let neutralCount = 0;
+      let sumDelta = 0;
       for (const pIdx of c.pixels) {
         const p = pIdx * 4;
         const r = data[p], g = data[p + 1], b = data[p + 2];
         const l = 0.299 * r + 0.587 * g + 0.114 * b;
         if (l > peakLum) peakLum = l;
         if (Math.max(r, g, b) - Math.min(r, g, b) < 55) neutralCount++;
+
+        const cx = pIdx % w;
+        const cy = Math.floor(pIdx / w);
+        const yTop = Math.max(0, cy - rad);
+        const yBot = Math.min(h - 1, cy + rad);
+        const xLeft = Math.max(0, cx - rad);
+        const xRight = Math.min(w - 1, cx + rad);
+        const localBg = (lum[yTop * w + cx] + lum[yBot * w + cx] + lum[cy * w + xLeft] + lum[cy * w + xRight]) * 0.25;
+        sumDelta += (l - localBg);
       }
+
+      const meanDelta = sumDelta / size;
+      // Require measurable contrast difference from surround (prevents false positives on plain/flat textures)
+      if (meanDelta < 9.0) continue;
 
       const neutrality = neutralCount / size;
       if (neutrality < 0.5) continue;
@@ -570,8 +583,9 @@ export class WatermarkRemover {
       if (ar > 0.45) score *= 2.0;
       if (!touchesBorder) score *= 1.8;
       if (peakLum > 160) score *= 1.5;
+      score *= (meanDelta / 10.0);
 
-      validWatermarks.push({ comp: c, score, bw, bh });
+      validWatermarks.push({ comp: c, score, bw, bh, meanDelta });
     }
 
     validWatermarks.sort((a, b) => b.score - a.score);
@@ -579,8 +593,8 @@ export class WatermarkRemover {
     const filteredMask = new Uint8Array(totalPixels);
     let filteredCount = 0;
 
-    // Retain only authentic watermark cluster(s)
-    if (validWatermarks.length > 0) {
+    // Retain only authentic watermark cluster(s) with sufficient confidence
+    if (validWatermarks.length > 0 && validWatermarks[0].score >= 35.0) {
       const top = validWatermarks[0];
       for (const pIdx of top.comp.pixels) {
         filteredMask[pIdx] = 1;
@@ -588,7 +602,7 @@ export class WatermarkRemover {
       }
       for (let i = 1; i < Math.min(3, validWatermarks.length); i++) {
         const second = validWatermarks[i];
-        if (second.score >= top.score * 0.45) {
+        if (second.score >= top.score * 0.45 && second.meanDelta >= 8.0) {
           for (const pIdx of second.comp.pixels) {
             filteredMask[pIdx] = 1;
             filteredCount++;
@@ -597,9 +611,9 @@ export class WatermarkRemover {
       }
     }
 
-    const minPixels = 6;
-    const maxPixels = Math.floor(totalPixels * 0.35);
-    const hasWatermark = filteredCount >= minPixels && filteredCount <= maxPixels;
+    const minPixels = 12;
+    const maxPixels = Math.floor(totalPixels * 0.30);
+    const hasWatermark = validWatermarks.length > 0 && filteredCount >= minPixels && filteredCount <= maxPixels;
 
     return { mask: filteredMask, count: filteredCount, hasWatermark };
   }

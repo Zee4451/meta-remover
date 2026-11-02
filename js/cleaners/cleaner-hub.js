@@ -11,7 +11,6 @@ import { WebPCleaner } from './webp-cleaner.js';
 import { MP4Cleaner } from './mp4-cleaner.js';
 import { CanvasCleaner } from './canvas-cleaner.js';
 import { VideoWatermarkCleaner } from './video-watermark-cleaner.js';
-import { CameraSpoofer, CAMERA_PROFILES } from './camera-spoofer.js';
 
 export class CleanerHub {
   /**
@@ -39,13 +38,9 @@ export class CleanerHub {
     const removeWatermark = !!options.removeWatermark;
 
     if (isVideo) {
-      const explicitInpaintRequested = (options.customBoxes && options.customBoxes.length > 0) ||
-                                       (options.inpaintVideoWatermark === true);
-      const shouldInpaint = removeWatermark || explicitInpaintRequested;
-
-      if (shouldInpaint) {
-        // High-Bitrate Frame-Accurate Video Watermark Inpainting (Dynamic 1.25x Bitrate)
-        const containerBlob = new Blob([MP4Cleaner.clean(originalBuffer)], { type: file.type || 'video/mp4' });
+      const explicitVideoBoxes = (options.customBoxes && options.customBoxes.length > 0);
+      if (removeWatermark || explicitVideoBoxes) {
+        // High-Bitrate Frame-Accurate Video Watermark Inpainting
         const videoResult = await VideoWatermarkCleaner.clean(file, {
           removeWatermark: true,
           corner: options.corner || 'bottom-right',
@@ -55,28 +50,32 @@ export class CleanerHub {
         });
 
         cleanedBlob = (videoResult && videoResult.blob) ? videoResult.blob : videoResult;
+        watermarkMetrics = (videoResult && videoResult.watermarkMetrics) ? videoResult.watermarkMetrics : null;
 
-        // If VideoWatermarkCleaner detected no authentic watermark or ran in headless/container mode:
-        if (!videoResult || !videoResult.watermarkMetrics || !videoResult.watermarkMetrics.watermarkDetected || cleanedBlob.size === containerBlob.size) {
-          cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
-          watermarkMetrics = null;
+        if (watermarkMetrics && watermarkMetrics.watermarkDetected) {
+          cleaningMethod = explicitVideoBoxes ? 'user-box-inpaint' : 'video-watermark-transcode';
         } else {
-          cleaningMethod = 'video-watermark-canvas';
-          watermarkMetrics = videoResult.watermarkMetrics;
+          // If no watermark detected and no custom boxes, pure container clean was performed
+          cleaningMethod = 'lossless';
+          watermarkMetrics = null;
         }
+      } else if (options.scrubMode === 'deep') {
+        // Video Graceful Fallback: Canvas 2D cannot re-encode multi-track video/audio streams.
+        // Fall back to lossless container clean to preserve playback & audio synchronization.
+        cleaningMethod = 'lossless-video-fallback';
+        const cleanedBytes = MP4Cleaner.clean(originalBuffer);
+        cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
       } else {
-        // Standard Lossless MP4/MOV container clean (0% re-encoding, 100% original video/audio bitstream)
-        cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
+        // Standard Lossless MP4/MOV container clean (0% re-encoding)
+        cleaningMethod = 'lossless';
         const cleanedBytes = MP4Cleaner.clean(originalBuffer);
         cleanedBlob = new Blob([cleanedBytes], { type: file.type || 'video/mp4' });
       }
     } else if (isImage) {
-      if (removeWatermark || options.scrubMode === 'deep') {
-        // Image Canvas Pipeline: Used when inpainting visible watermarks or deep anti-SynthID dither is requested
-        cleaningMethod = removeWatermark 
-          ? (options.scrubMode === 'deep' ? 'deep-canvas-watermark' : 'lossless-watermark-canvas')
-          : 'deep-canvas';
+      const explicitBoxes = (options.customBoxes && options.customBoxes.length > 0);
+      const isDeepScrub = (options.scrubMode === 'deep');
 
+      if (removeWatermark || isDeepScrub || explicitBoxes) {
         let targetFormat = 'image/png';
         if (options.exportFormat && options.exportFormat !== 'original') {
           targetFormat = options.exportFormat;
@@ -94,16 +93,44 @@ export class CleanerHub {
         const canvasResult = await CanvasCleaner.clean(file, {
           format: targetFormat,
           quality: 1.0, // Guaranteed 100% maximum encoding quality
-          antiSynthID: options.scrubMode === 'deep' ? (options.antiSynthID ?? true) : false,
-          removeWatermark: removeWatermark,
+          antiSynthID: isDeepScrub ? (options.antiSynthID ?? true) : false,
+          removeWatermark: removeWatermark || explicitBoxes,
           corner: options.corner || 'bottom-right',
           customROI: options.customROI || null,
           customBoxes: options.customBoxes || null,
           watermarkSensitivity: options.watermarkSensitivity || 1.0
         });
 
-        cleanedBlob = canvasResult.blob;
-        watermarkMetrics = canvasResult.watermarkMetrics;
+        const hasDetectedWatermark = canvasResult.watermarkMetrics &&
+                                     canvasResult.watermarkMetrics.watermarkDetected === true &&
+                                     canvasResult.watermarkMetrics.pixelsInpainted > 0;
+
+        // If user is in standard (non-deep) mode and NO authentic watermark was detected:
+        // Do NOT re-encode clean images via Canvas! Revert to 100% lossless binary stripping
+        // to prevent file size bloat and eliminate false "Watermark Inpainted" claims!
+        if (!isDeepScrub && !explicitBoxes && !hasDetectedWatermark) {
+          cleaningMethod = 'lossless';
+          watermarkMetrics = null;
+
+          if (name.endsWith('.jpg') || name.endsWith('.jpeg') || file.type === 'image/jpeg') {
+            const cleanedBytes = JPEGCleaner.clean(originalBuffer, { keepICC: options.keepICC ?? false });
+            cleanedBlob = new Blob([cleanedBytes], { type: 'image/jpeg' });
+          } else if (name.endsWith('.png') || file.type === 'image/png') {
+            const cleanedBytes = PNGCleaner.clean(originalBuffer, { keepICC: options.keepICC ?? false });
+            cleanedBlob = new Blob([cleanedBytes], { type: 'image/png' });
+          } else if (name.endsWith('.webp') || file.type === 'image/webp') {
+            const cleanedBytes = WebPCleaner.clean(originalBuffer);
+            cleanedBlob = new Blob([cleanedBytes], { type: 'image/webp' });
+          } else {
+            cleanedBlob = canvasResult.blob;
+          }
+        } else {
+          cleanedBlob = canvasResult.blob;
+          watermarkMetrics = hasDetectedWatermark ? canvasResult.watermarkMetrics : null;
+          cleaningMethod = explicitBoxes
+            ? 'user-box-inpaint'
+            : (hasDetectedWatermark ? 'canvas-watermark' : 'deep-canvas');
+        }
       } else {
         // GUARANTEED ZERO VISUAL QUALITY LOSS:
         // When only metadata scrubbing is requested, strictly use Binary ArrayBuffer Scrubber
@@ -138,14 +165,6 @@ export class CleanerHub {
       cleanedBlob = new Blob([originalBuffer], { type: file.type || 'application/octet-stream' });
     }
 
-    // 1b. Stealth Camera Profile Injection (if requested)
-    if (options.stealthCameraMode) {
-      const rawCleanedBytes = new Uint8Array(await cleanedBlob.arrayBuffer());
-      const profileKey = options.cameraProfile || 'iphone-16-pro';
-      const spoofedBytes = CameraSpoofer.inject(rawCleanedBytes, profileKey, cleanedBlob.type);
-      cleanedBlob = new Blob([spoofedBytes], { type: cleanedBlob.type });
-    }
-
     // 2. Post-cleaning metadata verification!
     const cleanedBuffer = await cleanedBlob.arrayBuffer();
     const afterAnalysis = await AIDetector.detect(
@@ -153,49 +172,17 @@ export class CleanerHub {
       cleanedBuffer
     );
 
-    // 3. Binary Byte-Level String Scan & Mathematical Audit Verification
-    const cleanedBytes = new Uint8Array(cleanedBuffer);
-    const sampleBytes = cleanedBytes.length <= 1500000
-      ? cleanedBytes
-      : new Uint8Array([...cleanedBytes.subarray(0, 750000), ...cleanedBytes.subarray(cleanedBytes.length - 750000)]);
-    const cleanedText = new TextDecoder('utf-8', { fatal: false }).decode(sampleBytes);
-
-    const activeCameraProfile = options.stealthCameraMode
-      ? (CAMERA_PROFILES[options.cameraProfile || 'iphone-16-pro']?.name || 'Apple iPhone 16 Pro')
-      : null;
-
-    const auditVerification = {
-      verifiedAt: Date.now(),
-      c2paRemaining: afterAnalysis.c2pa?.found ? 1 : (cleanedText.includes('c2pa') || cleanedText.includes('jumd') ? 1 : 0),
-      promptsRemaining: afterAnalysis.prompts?.length || 0,
-      exifTagsRemaining: options.stealthCameraMode ? 0 : Object.keys(afterAnalysis.exif || {}).length,
-      synthIdRemaining: cleanedText.includes('SynthID') ? 1 : 0,
-      trainedAlgorithmicMediaRemaining: cleanedText.includes('trainedAlgorithmicMedia') ? 1 : 0,
-      udtaRemaining: (isVideo && !options.stealthCameraMode && cleanedText.includes('udta')) ? 1 : 0,
-      meanAbsolutePixelDiff: (watermarkMetrics && watermarkMetrics.pixelDiff !== undefined)
-        ? watermarkMetrics.pixelDiff
-        : (watermarkMetrics && watermarkMetrics.pixelsInpainted > 0 ? 15.0 : 0.0),
-      cameraProfile: activeCameraProfile,
-      isBinaryClean: !afterAnalysis.hasAIMetadata &&
-                     !afterAnalysis.hasGPS &&
-                     (!options.stealthCameraMode ? Object.keys(afterAnalysis.exif || {}).length === 0 : true) &&
-                     !cleanedText.includes('SynthID') &&
-                     !cleanedText.includes('trainedAlgorithmicMedia')
-    };
-
     const endTime = performance.now();
     const durationMs = Math.round(endTime - startTime);
 
     // Generate output filename matching exact container format
     const extMatch = file.name.match(/\.[^.]+$/);
     let ext = extMatch ? extMatch[0].toLowerCase() : (isVideo ? '.mp4' : (isImage ? '.jpg' : ''));
-    if (cleaningMethod.includes('canvas') || cleaningMethod.includes('video-watermark')) {
-      if (cleanedBlob.type === 'image/png') ext = '.png';
-      else if (cleanedBlob.type === 'image/webp') ext = '.webp';
-      else if (cleanedBlob.type === 'image/jpeg') ext = '.jpg';
-      else if (cleanedBlob.type && cleanedBlob.type.startsWith('video/webm')) ext = '.webm';
-      else if (cleanedBlob.type && cleanedBlob.type.startsWith('video/mp4')) ext = '.mp4';
-    }
+    if (cleanedBlob.type === 'image/png') ext = '.png';
+    else if (cleanedBlob.type === 'image/webp') ext = '.webp';
+    else if (cleanedBlob.type === 'image/jpeg') ext = '.jpg';
+    else if (cleanedBlob.type && cleanedBlob.type.startsWith('video/webm')) ext = '.webm';
+    else if (cleanedBlob.type && cleanedBlob.type.startsWith('video/mp4')) ext = '.mp4';
     const baseName = extMatch ? file.name.slice(0, -extMatch[0].length) : file.name;
     const safeBaseName = baseName.replace(/[<>:"/\\|?*]/g, '_').trim();
     const cleanFileName = `${safeBaseName}_clean${ext}`;
@@ -213,11 +200,7 @@ export class CleanerHub {
       beforeAnalysis: beforeAnalysis,
       afterAnalysis: afterAnalysis,
       watermarkMetrics: watermarkMetrics,
-      auditVerification: auditVerification,
-      cameraProfile: activeCameraProfile,
-      cameraProfileInjected: !!options.stealthCameraMode,
-      cameraProfileName: activeCameraProfile,
-      isFullyClean: !afterAnalysis.hasAIMetadata && !afterAnalysis.hasGPS && (!options.stealthCameraMode ? Object.keys(afterAnalysis.exif).length === 0 : true)
+      isFullyClean: !afterAnalysis.hasAIMetadata && !afterAnalysis.hasGPS && Object.keys(afterAnalysis.exif).length === 0
     };
   }
 }

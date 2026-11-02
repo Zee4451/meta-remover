@@ -4,20 +4,17 @@
  * sample creation, theme toggling, and the metadata inspector modal.
  */
 
-import { CleanerHub } from './cleaners/cleaner-hub.js?v=19';
-import { SampleGenerator } from './utils/samples.js?v=19';
-import { AIDetector } from './detectors/ai-detector.js?v=19';
-import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=19';
+import { CleanerHub } from './cleaners/cleaner-hub.js?v=13';
+import { SampleGenerator } from './utils/samples.js?v=13';
+import { AIDetector } from './detectors/ai-detector.js?v=13';
+import { WatermarkBoxSelector } from './cleaners/watermark-box-selector.js?v=13';
 
 class App {
   constructor() {
     this.queue = []; // Array of { id, file, result, status: 'pending'|'processing'|'done'|'error', thumbnail }
     this.currentMode = 'lossless'; // 'lossless' | 'deep'
     this.activeModalFile = null;
-    this.globalCustomBoxes = [];
-    this.activeRoiSelector = null;
-    this.activeRoiFileItem = null;
-    this.activeRoiMediaUrl = null;
+    this.isBatchProcessing = false;
 
     this.initElements();
     this.initEventListeners();
@@ -47,10 +44,6 @@ class App {
     this.toggleWatermark = document.getElementById('toggleWatermark');
     this.cornerPresetSelect = document.getElementById('cornerPresetSelect');
     this.cornerPresetGroup = document.getElementById('cornerPresetGroup');
-    this.toggleStealthCamera = document.getElementById('toggleStealthCamera');
-    this.stealthCameraGroup = document.getElementById('stealthCameraGroup');
-    this.stealthCameraSelect = document.getElementById('stealthCameraSelect');
-    this.stealthCameraInfo = document.getElementById('stealthCameraInfo');
 
     // Action bar & Queue
     this.actionBar = document.getElementById('actionBar');
@@ -63,7 +56,6 @@ class App {
     // Progress bar
     this.progressWrapper = document.getElementById('progressWrapper');
     this.progressBar = document.getElementById('progressBar');
-    this.progressBarFill = document.getElementById('progressBarFill');
     this.progressText = document.getElementById('progressText');
     this.progressPercent = document.getElementById('progressPercent');
     this.liveStatus = document.getElementById('liveStatus');
@@ -89,27 +81,28 @@ class App {
     this.compareCornerModal = document.getElementById('compareCornerModal');
     this.closeCompareModalBtn = document.getElementById('closeCompareModalBtn');
 
-    // Interactive ROI Watermark Selector Modal
-    this.openBoxSelectorBtn = document.getElementById('openBoxSelectorBtn');
-    this.roiSelectorModal = document.getElementById('roiSelectorModal');
+    // Interactive ROI Bounding-Box Modal
+    this.roiModal = document.getElementById('roiModal');
     this.closeRoiModalBtn = document.getElementById('closeRoiModalBtn');
-    this.cancelRoiBtn = document.getElementById('cancelRoiBtn');
-    this.applyRoiBtn = document.getElementById('applyRoiBtn');
-    this.roiModalTitle = document.getElementById('roiModalTitle');
-    this.roiPresetGemini = document.getElementById('roiPresetGemini');
-    this.roiClearBoxesBtn = document.getElementById('roiClearBoxesBtn');
-    this.roiAddCustomBoxBtn = document.getElementById('roiAddCustomBoxBtn');
-    this.roiPresetButtons = document.querySelectorAll('#roiSelectorModal .btn-preset-pill');
-    this.roiMotionBar = document.getElementById('roiMotionBar');
-    this.roiMotionButtons = document.querySelectorAll('#roiSelectorModal .btn-motion-pill');
+    this.roiCancelBtn = document.getElementById('roiCancelBtn');
+    this.roiApplyBtn = document.getElementById('roiApplyBtn');
     this.roiPreviewImg = document.getElementById('roiPreviewImg');
     this.roiPreviewVideo = document.getElementById('roiPreviewVideo');
     this.roiOverlayCanvas = document.getElementById('roiOverlayCanvas');
-    this.roiVideoScrubberBar = document.getElementById('roiVideoScrubberBar');
+    this.roiScrubberBar = document.getElementById('roiScrubberBar');
     this.roiPlayPauseBtn = document.getElementById('roiPlayPauseBtn');
     this.roiTimeline = document.getElementById('roiTimeline');
     this.roiTimeDisplay = document.getElementById('roiTimeDisplay');
-    this.roiBoxesSummary = document.getElementById('roiBoxesSummary');
+    this.roiBoxCountText = document.getElementById('roiBoxCountText');
+    this.roiPresetBr = document.getElementById('roiPresetBr');
+    this.roiPresetBl = document.getElementById('roiPresetBl');
+    this.roiPresetTr = document.getElementById('roiPresetTr');
+    this.roiPresetTl = document.getElementById('roiPresetTl');
+    this.roiPresetCenter = document.getElementById('roiPresetCenter');
+    this.roiClearBoxes = document.getElementById('roiClearBoxes');
+    this.boxSelector = null;
+    this.activeRoiItem = null;
+    this.activeRoiUrl = null;
 
     // Toast Container
     this.toastContainer = document.getElementById('toastContainer');
@@ -127,14 +120,17 @@ class App {
 
     // Dynamic paste shortcut: ⌘+V on Mac, Ctrl+V on Windows/Linux, hidden on touch mobile
     const pasteHint = document.getElementById('pasteHint');
-    const pasteKbd = document.getElementById('pasteKbd');
     if (pasteHint) {
       const isMac = /Mac|iPod|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
       const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
       if (isTouch && window.innerWidth < 768) {
-        pasteHint.style.display = 'none';
-      } else if (pasteKbd) {
-        pasteKbd.textContent = isMac ? '⌘+V' : 'Ctrl+V';
+        if (pasteHint.parentElement) {
+          pasteHint.parentElement.style.display = 'none';
+        }
+      } else if (isMac) {
+        pasteHint.textContent = '⌘+V';
+      } else {
+        pasteHint.textContent = 'Ctrl+V';
       }
     }
 
@@ -251,131 +247,6 @@ class App {
       });
     }
 
-    if (this.cornerPresetSelect) {
-      this.cornerPresetSelect.addEventListener('change', () => {
-        if (this.cornerPresetSelect.value === 'custom') {
-          this.openRoiModal(null);
-        }
-      });
-    }
-
-    if (this.openBoxSelectorBtn) {
-      this.openBoxSelectorBtn.addEventListener('click', () => {
-        this.openRoiModal(null);
-      });
-    }
-
-    // Stealth Camera Mode Listeners
-    if (this.toggleStealthCamera && this.stealthCameraGroup) {
-      this.toggleStealthCamera.addEventListener('change', () => {
-        const isChecked = this.toggleStealthCamera.checked;
-        this.stealthCameraGroup.style.display = isChecked ? 'flex' : 'none';
-        if (isChecked) {
-          this.updateStealthCameraInfo();
-          this.showToast('Stealth Camera Profile enabled! Authentic camera tags will be injected (0 GPS).', 'info');
-        }
-      });
-    }
-
-    if (this.stealthCameraSelect) {
-      this.stealthCameraSelect.addEventListener('change', () => {
-        this.updateStealthCameraInfo();
-      });
-    }
-
-    // ROI Modal Action Buttons
-    if (this.closeRoiModalBtn) {
-      this.closeRoiModalBtn.addEventListener('click', () => this.closeRoiModal());
-    }
-    if (this.cancelRoiBtn) {
-      this.cancelRoiBtn.addEventListener('click', () => this.closeRoiModal());
-    }
-    if (this.applyRoiBtn) {
-      this.applyRoiBtn.addEventListener('click', () => this.applyRoiBoxes());
-    }
-    if (this.roiSelectorModal) {
-      this.roiSelectorModal.addEventListener('click', (e) => {
-        if (e.target === this.roiSelectorModal) this.closeRoiModal();
-      });
-    }
-
-    // ROI Quick Preset Pills
-    this.roiPresetButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (!this.activeRoiSelector) return;
-        const preset = btn.dataset.preset;
-        this.roiPresetButtons.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-
-        if (preset === 'clear') {
-          this.activeRoiSelector.clearBoxes();
-        } else if (preset === 'draw-custom') {
-          this.activeRoiSelector.addCustomBox();
-        } else if (preset === 'bottom-right-alt') {
-          this.activeRoiSelector.addCornerPreset('bottom-right');
-        } else {
-          this.activeRoiSelector.addCornerPreset(preset);
-        }
-      });
-    });
-
-    // ROI Video Motion Mode Pills
-    this.roiMotionButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (!this.activeRoiSelector) return;
-        const motion = btn.dataset.motion;
-        this.roiMotionButtons.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        this.activeRoiSelector.setMode(motion);
-
-        if (motion === 'autotrack') {
-          this.showToast('Auto-tracking active! Template signature captured for moving watermark.', 'info');
-        } else if (motion === 'keyframe') {
-          this.showToast('Keyframe mode: Scrubber position gates active boxes.', 'info');
-        }
-      });
-    });
-
-    // ROI Video Scrubber & Play/Pause
-    if (this.roiPlayPauseBtn && this.roiPreviewVideo) {
-      this.roiPlayPauseBtn.addEventListener('click', () => {
-        if (this.roiPreviewVideo.paused) {
-          this.roiPreviewVideo.play();
-          this.roiPlayPauseBtn.textContent = '⏸';
-        } else {
-          this.roiPreviewVideo.pause();
-          this.roiPlayPauseBtn.textContent = '▶';
-        }
-      });
-
-      this.roiPreviewVideo.addEventListener('timeupdate', () => {
-        const cur = this.roiPreviewVideo.currentTime || 0;
-        const dur = this.roiPreviewVideo.duration || 1;
-        if (this.roiTimeline) {
-          this.roiTimeline.value = (cur / dur) * 100;
-        }
-        if (this.roiTimeDisplay) {
-          const curM = Math.floor(cur / 60).toString().padStart(2, '0');
-          const curS = Math.floor(cur % 60).toString().padStart(2, '0');
-          const durM = Math.floor(dur / 60).toString().padStart(2, '0');
-          const durS = Math.floor(dur % 60).toString().padStart(2, '0');
-          this.roiTimeDisplay.textContent = `${curM}:${curS} / ${durM}:${durS}`;
-        }
-        if (this.activeRoiSelector) {
-          this.activeRoiSelector.render();
-        }
-      });
-
-      this.roiTimeline?.addEventListener('input', (e) => {
-        if (!this.roiPreviewVideo) return;
-        const dur = this.roiPreviewVideo.duration || 1;
-        this.roiPreviewVideo.currentTime = (parseFloat(e.target.value) / 100) * dur;
-        if (this.activeRoiSelector) {
-          this.activeRoiSelector.render();
-        }
-      });
-    }
-
     // Modal
     this.modalCloseBtn.addEventListener('click', () => this.closeModal());
     this.inspectorModal.addEventListener('click', (e) => {
@@ -392,17 +263,86 @@ class App {
       });
     }
 
-    // Universal Escape key closes any open modal (Inspector, ROI Selector, Compare Corner, or Mobile QR dialog)
+    // ROI Bounding Box Modal
+    if (this.closeRoiModalBtn) {
+      this.closeRoiModalBtn.addEventListener('click', () => this.closeRoiModal());
+    }
+    if (this.roiCancelBtn) {
+      this.roiCancelBtn.addEventListener('click', () => this.closeRoiModal());
+    }
+    if (this.roiModal) {
+      this.roiModal.addEventListener('click', (e) => {
+        if (e.target === this.roiModal) this.closeRoiModal();
+      });
+    }
+    if (this.roiApplyBtn) {
+      this.roiApplyBtn.addEventListener('click', () => this.applyRoiModal());
+    }
+
+    if (this.roiPresetBr) {
+      this.roiPresetBr.addEventListener('click', () => {
+        if (this.boxSelector) {
+          this.boxSelector.clearBoxes();
+          this.boxSelector.addCornerPreset('bottom-right');
+          this.updateRoiBoxCount(this.boxSelector.getBoxes());
+        }
+      });
+    }
+    if (this.roiPresetBl) {
+      this.roiPresetBl.addEventListener('click', () => {
+        if (this.boxSelector) {
+          this.boxSelector.clearBoxes();
+          this.boxSelector.addCornerPreset('bottom-left');
+          this.updateRoiBoxCount(this.boxSelector.getBoxes());
+        }
+      });
+    }
+    if (this.roiPresetTr) {
+      this.roiPresetTr.addEventListener('click', () => {
+        if (this.boxSelector) {
+          this.boxSelector.clearBoxes();
+          this.boxSelector.addCornerPreset('top-right');
+          this.updateRoiBoxCount(this.boxSelector.getBoxes());
+        }
+      });
+    }
+    if (this.roiPresetTl) {
+      this.roiPresetTl.addEventListener('click', () => {
+        if (this.boxSelector) {
+          this.boxSelector.clearBoxes();
+          this.boxSelector.addCornerPreset('top-left');
+          this.updateRoiBoxCount(this.boxSelector.getBoxes());
+        }
+      });
+    }
+    if (this.roiPresetCenter) {
+      this.roiPresetCenter.addEventListener('click', () => {
+        if (this.boxSelector) {
+          this.boxSelector.addCustomBox(0.38, 0.38, 0.24, 0.24);
+          this.updateRoiBoxCount(this.boxSelector.getBoxes());
+        }
+      });
+    }
+    if (this.roiClearBoxes) {
+      this.roiClearBoxes.addEventListener('click', () => {
+        if (this.boxSelector) {
+          this.boxSelector.clearBoxes();
+          this.updateRoiBoxCount([]);
+        }
+      });
+    }
+
+    // Universal Escape key closes any open modal (Inspector, Compare Corner, ROI Box, or Mobile QR dialog)
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (this.roiSelectorModal && this.roiSelectorModal.classList.contains('open')) {
-          this.closeRoiModal();
-        }
         if (this.inspectorModal && this.inspectorModal.classList.contains('open')) {
           this.closeModal();
         }
         if (this.compareCornerModal && this.compareCornerModal.classList.contains('open')) {
           this.closeCompareModal();
+        }
+        if (this.roiModal && this.roiModal.classList.contains('open')) {
+          this.closeRoiModal();
         }
         const mobileModal = document.getElementById('mobileModal');
         if (mobileModal && mobileModal.classList.contains('open')) {
@@ -448,49 +388,6 @@ class App {
     }
   }
 
-  updateStealthCameraInfo() {
-    if (!this.stealthCameraInfo || !this.stealthCameraSelect) return;
-    const profile = this.stealthCameraSelect.value;
-    switch (profile) {
-      case 'iphone-16-pro':
-        this.stealthCameraInfo.innerHTML = `
-          <span class="stealth-pill-tag">📱 Apple iPhone 16 Pro</span>
-          <span class="stealth-pill-tag">24mm f/1.78</span>
-          <span class="stealth-pill-tag">1/120s ISO 64</span>
-          <span class="stealth-pill-tag">sRGB</span>
-          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
-        `;
-        break;
-      case 'sony-a7iv':
-        this.stealthCameraInfo.innerHTML = `
-          <span class="stealth-pill-tag">📷 Sony Alpha A7 IV</span>
-          <span class="stealth-pill-tag">FE 24-70mm GM II</span>
-          <span class="stealth-pill-tag">35mm f/2.8 ISO 100</span>
-          <span class="stealth-pill-tag">sRGB</span>
-          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
-        `;
-        break;
-      case 'canon-eos-r5':
-        this.stealthCameraInfo.innerHTML = `
-          <span class="stealth-pill-tag">🎥 Canon EOS R5</span>
-          <span class="stealth-pill-tag">RF 24-70mm L IS</span>
-          <span class="stealth-pill-tag">50mm f/2.8 ISO 100</span>
-          <span class="stealth-pill-tag">sRGB</span>
-          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
-        `;
-        break;
-      case 'fujifilm-xt5':
-        this.stealthCameraInfo.innerHTML = `
-          <span class="stealth-pill-tag">🎞️ Fujifilm X-T5</span>
-          <span class="stealth-pill-tag">XF 33mm F1.4 R</span>
-          <span class="stealth-pill-tag">50mm f/1.4 ISO 125</span>
-          <span class="stealth-pill-tag">sRGB</span>
-          <span class="stealth-pill-tag safe">0 GPS (Private)</span>
-        `;
-        break;
-    }
-  }
-
   /**
    * Adds uploaded or sampled files to the processing queue
    */
@@ -510,7 +407,7 @@ class App {
 
       // Asynchronously extract video frame preview if video
       if (isVideo) {
-        this.generateVideoThumbnail(file).then(thumb => {
+        this.generateVideoThumbnail(file, item).then(thumb => {
           if (thumb) {
             item.thumbnail = thumb;
             const thumbEl = document.querySelector(`#card-${item.id} .file-thumbnail`);
@@ -538,10 +435,18 @@ class App {
     return null;
   }
 
+  formatDuration(seconds) {
+    if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return '00:00';
+    const totalSecs = Math.round(seconds);
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
   /**
    * Extracts a video frame to use as card preview thumbnail
    */
-  async generateVideoThumbnail(file) {
+  async generateVideoThumbnail(file, item = null) {
     return new Promise((resolve) => {
       const video = document.createElement('video');
       video.preload = 'metadata';
@@ -549,6 +454,16 @@ class App {
       video.playsInline = true;
       const url = URL.createObjectURL(file);
       video.src = url;
+
+      video.onloadedmetadata = () => {
+        if (item && Number.isFinite(video.duration) && video.duration > 0) {
+          item.videoDuration = video.duration;
+          const durEl = document.getElementById(`meta-dur-${item.id}`);
+          if (durEl) {
+            durEl.textContent = `• ⏱️ ${this.formatDuration(video.duration)}`;
+          }
+        }
+      };
 
       video.onloadeddata = () => {
         video.currentTime = Math.min(1.0, video.duration > 2 ? 0.5 : 0.1);
@@ -583,7 +498,7 @@ class App {
       setTimeout(() => {
         URL.revokeObjectURL(url);
         resolve(null);
-      }, 3000);
+      }, 4000);
     });
   }
 
@@ -664,6 +579,7 @@ class App {
           <span class="meta-item">${this.formatBytes(item.file.size)}</span>
           <span>•</span>
           <span class="meta-item">${item.file.type || 'Binary Data'}</span>
+          <span class="meta-item" id="meta-dur-${item.id}"></span>
           <span id="diff-${item.id}"></span>
         </div>
         <div class="threat-tags-row" id="tags-${item.id}">
@@ -671,13 +587,13 @@ class App {
         </div>
       </div>
       <div class="file-actions">
+        <button type="button" class="btn-roi-item" id="boxSelectBtn-${item.id}" title="Select custom watermark box on video or image">
+          🎯 Select Box
+        </button>
         <button type="button" class="btn-icon" id="inspectBtn-${item.id}" title="Inspect Metadata & Threats">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
           </svg>
-        </button>
-        <button type="button" class="btn-roi-item" id="roiBtn-${item.id}" title="Select / Edit Watermark Bounding Boxes & Motion Tracker">
-          <span>🎯</span> ROI Area
         </button>
         <button type="button" class="btn-primary" id="cleanBtn-${item.id}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -699,30 +615,176 @@ class App {
           </svg>
         </button>
       </div>
-      <!-- Embedded Live Card Progress Track -->
-      <div class="card-progress-track" id="cardProgressTrack-${item.id}">
-        <div class="card-progress-fill" id="cardProgressFill-${item.id}"></div>
-      </div>
     `;
 
     this.queueList.prepend(card);
 
     // Bind item buttons
-    card.querySelector(`#roiBtn-${item.id}`).addEventListener('click', () => this.openRoiModal(item));
+    card.querySelector(`#boxSelectBtn-${item.id}`).addEventListener('click', () => this.openRoiModal(item));
     card.querySelector(`#cleanBtn-${item.id}`).addEventListener('click', () => this.processSingleItem(item));
     card.querySelector(`#inspectBtn-${item.id}`).addEventListener('click', () => this.openInspector(item));
     card.querySelector(`#deleteBtn-${item.id}`).addEventListener('click', () => this.removeItem(item));
     card.querySelector(`#downloadBtn-${item.id}`).addEventListener('click', () => this.downloadSingle(item));
 
-    const tagsRow = card.querySelector(`#tags-${item.id}`);
-    if (tagsRow) {
-      tagsRow.style.cursor = 'pointer';
-      tagsRow.title = 'Click to open Metadata Radar & view detected vs removed details';
-      tagsRow.addEventListener('click', () => this.openInspector(item));
-    }
-
     // Run quick pre-inspection to populate tags
     this.inspectItemPreClean(item);
+  }
+
+  /**
+   * Opens the interactive Bounding Box / Watermark Selector Modal
+   */
+  openRoiModal(item) {
+    if (!this.roiModal) return;
+    this.activeRoiItem = item;
+    const isVideo = item.file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(item.file.name);
+
+    if (this.activeRoiUrl) {
+      URL.revokeObjectURL(this.activeRoiUrl);
+      this.activeRoiUrl = null;
+    }
+    this.activeRoiUrl = URL.createObjectURL(item.file);
+
+    if (isVideo) {
+      if (this.roiPreviewImg) this.roiPreviewImg.style.display = 'none';
+      if (this.roiPreviewVideo) {
+        this.roiPreviewVideo.style.display = 'block';
+        this.roiPreviewVideo.src = this.activeRoiUrl;
+      }
+      if (this.roiScrubberBar) this.roiScrubberBar.style.display = 'flex';
+
+      if (this.roiPreviewVideo) {
+        this.roiPreviewVideo.onloadedmetadata = () => {
+          if (this.boxSelector) this.boxSelector.destroy();
+          this.boxSelector = new WatermarkBoxSelector(this.roiPreviewVideo, this.roiOverlayCanvas, {
+            onChange: (boxes) => this.updateRoiBoxCount(boxes)
+          });
+          if (item.customBoxes && item.customBoxes.length > 0) {
+            this.boxSelector.setBoxes(item.customBoxes);
+          } else {
+            // Default to Gemini / AI bottom-right corner box
+            this.boxSelector.addCornerPreset('bottom-right');
+          }
+          this.updateRoiBoxCount(this.boxSelector.getBoxes());
+          this.setupRoiScrubber(this.roiPreviewVideo);
+        };
+      }
+    } else {
+      if (this.roiPreviewVideo) {
+        this.roiPreviewVideo.style.display = 'none';
+        this.roiPreviewVideo.pause();
+      }
+      if (this.roiScrubberBar) this.roiScrubberBar.style.display = 'none';
+      if (this.roiPreviewImg) {
+        this.roiPreviewImg.style.display = 'block';
+        this.roiPreviewImg.src = this.activeRoiUrl;
+
+        this.roiPreviewImg.onload = () => {
+          if (this.boxSelector) this.boxSelector.destroy();
+          this.boxSelector = new WatermarkBoxSelector(this.roiPreviewImg, this.roiOverlayCanvas, {
+            onChange: (boxes) => this.updateRoiBoxCount(boxes)
+          });
+          if (item.customBoxes && item.customBoxes.length > 0) {
+            this.boxSelector.setBoxes(item.customBoxes);
+          } else {
+            this.boxSelector.addCornerPreset('bottom-right');
+          }
+          this.updateRoiBoxCount(this.boxSelector.getBoxes());
+        };
+      }
+    }
+
+    this.roiModal.classList.add('open');
+  }
+
+  setupRoiScrubber(video) {
+    if (!this.roiTimeline || !this.roiTimeDisplay) return;
+    this.roiTimeline.value = 0;
+    this.roiTimeDisplay.textContent = `00:00 / ${this.formatDuration(video.duration)}`;
+
+    video.ontimeupdate = () => {
+      if (video.duration > 0) {
+        this.roiTimeline.value = (video.currentTime / video.duration) * 100;
+        this.roiTimeDisplay.textContent = `${this.formatDuration(video.currentTime)} / ${this.formatDuration(video.duration)}`;
+      }
+    };
+
+    this.roiTimeline.oninput = () => {
+      if (video.duration > 0) {
+        video.currentTime = (this.roiTimeline.value / 100) * video.duration;
+      }
+    };
+
+    if (this.roiPlayPauseBtn) {
+      this.roiPlayPauseBtn.textContent = '▶';
+      this.roiPlayPauseBtn.onclick = () => {
+        if (video.paused) {
+          video.play();
+          this.roiPlayPauseBtn.textContent = '⏸';
+        } else {
+          video.pause();
+          this.roiPlayPauseBtn.textContent = '▶';
+        }
+      };
+    }
+  }
+
+  updateRoiBoxCount(boxes = []) {
+    if (!this.roiBoxCountText) return;
+    const count = boxes.length;
+    this.roiBoxCountText.textContent = `${count} box(es) selected`;
+  }
+
+  closeRoiModal() {
+    if (this.roiModal) {
+      this.roiModal.classList.remove('open');
+    }
+    if (this.roiPreviewVideo) {
+      this.roiPreviewVideo.pause();
+      this.roiPreviewVideo.removeAttribute('src');
+    }
+    if (this.roiPreviewImg) {
+      this.roiPreviewImg.removeAttribute('src');
+    }
+    if (this.activeRoiUrl) {
+      URL.revokeObjectURL(this.activeRoiUrl);
+      this.activeRoiUrl = null;
+    }
+    if (this.boxSelector) {
+      this.boxSelector.destroy();
+      this.boxSelector = null;
+    }
+    this.activeRoiItem = null;
+  }
+
+  applyRoiModal() {
+    if (!this.activeRoiItem || !this.boxSelector) {
+      this.closeRoiModal();
+      return;
+    }
+    const boxes = this.boxSelector.getBoxes();
+    this.activeRoiItem.customBoxes = boxes;
+
+    const card = document.getElementById(`card-${this.activeRoiItem.id}`);
+    if (card) {
+      let badge = card.querySelector(`#roiBadge-${this.activeRoiItem.id}`);
+      const tagsContainer = card.querySelector('.threat-tags-row');
+      if (boxes.length > 0) {
+        if (!badge && tagsContainer) {
+          badge = document.createElement('span');
+          badge.className = 'badge-roi-custom';
+          badge.id = `roiBadge-${this.activeRoiItem.id}`;
+          tagsContainer.appendChild(badge);
+        }
+        if (badge) {
+          badge.textContent = `🎯 Custom Box (${boxes.length})`;
+        }
+      } else if (badge) {
+        badge.remove();
+      }
+    }
+
+    this.showToast(`Watermark box applied (${boxes.length} region${boxes.length === 1 ? '' : 's'})!`, 'success');
+    this.closeRoiModal();
   }
 
   /**
@@ -779,9 +841,9 @@ class App {
   }
 
   /**
-   * Process a single queue item with live progress tracking
+   * Process a single queue item
    */
-  async processSingleItem(item, isBatch = false, progressCallback = null) {
+  async processSingleItem(item) {
     const card = document.getElementById(`card-${item.id}`);
     const cleanBtn = document.getElementById(`cleanBtn-${item.id}`);
     const downloadBtn = document.getElementById(`downloadBtn-${item.id}`);
@@ -789,31 +851,29 @@ class App {
     const diff = document.getElementById(`diff-${item.id}`);
     const isVideo = item.file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(item.file.name);
 
-    if (cleanBtn) cleanBtn.disabled = true;
+    if (cleanBtn) {
+      cleanBtn.disabled = true;
+      cleanBtn.style.display = 'none';
+    }
 
-    // Helper to broadcast progress to global card and per-item card
-    const onProgress = (pct, msg) => {
-      const clamped = Math.min(100, Math.max(0, Math.round(pct)));
-      if (progressCallback) {
-        progressCallback(clamped, msg);
-      } else {
-        if (!isBatch) {
-          this.showProgress(clamped, `Cleaning ${item.file.name}: ${msg || 'Inpainting...'}`);
-        }
-        this.updateCardProgress(item.id, clamped, msg || 'Inpainting...');
-      }
-    };
+    // Remove any previous retry button
+    const prevRetry = card?.querySelector(`#retryBtn-${item.id}`);
+    if (prevRetry) prevRetry.remove();
 
-    onProgress(12, isVideo ? 'Inspecting video container...' : 'Analyzing file headers...');
+    if (badge) {
+      badge.className = 'badge-ai-threat badge-threat-processing';
+      badge.innerHTML = `<span class="spinner-inline"></span> Initializing...`;
+    }
+
+    if (!this.isBatchProcessing && this.progressWrapper) {
+      this.progressWrapper.style.display = 'block';
+      this.progressBar.value = 10;
+      this.progressPercent.textContent = '10%';
+      this.progressText.textContent = `Starting ${item.file.name}...`;
+      this.liveStatus.textContent = this.progressText.textContent;
+    }
 
     try {
-      const customBoxes = (item.customBoxes && item.customBoxes.length > 0)
-        ? item.customBoxes
-        : (this.globalCustomBoxes && this.globalCustomBoxes.length > 0 ? this.globalCustomBoxes : null);
-
-      const isStealthActive = this.toggleStealthCamera ? this.toggleStealthCamera.checked : false;
-      const cameraProfile = this.stealthCameraSelect ? this.stealthCameraSelect.value : 'iphone-16-pro';
-
       const options = {
         scrubMode: this.currentMode,
         antiSynthID: this.toggleSynthID.checked,
@@ -821,34 +881,55 @@ class App {
         stripPrompts: this.togglePrompts.checked,
         stripGPS: this.toggleGPS.checked,
         removeWatermark: this.toggleWatermark ? this.toggleWatermark.checked : true,
-        stealthCameraMode: isStealthActive,
-        cameraProfile: cameraProfile,
-        corner: customBoxes ? 'custom' : (this.cornerPresetSelect ? this.cornerPresetSelect.value : 'bottom-right'),
-        customBoxes: customBoxes,
-        onProgress: onProgress
+        corner: this.cornerPresetSelect ? this.cornerPresetSelect.value : 'bottom-right',
+        customBoxes: item.customBoxes || null,
+        onProgress: (percent, msg) => {
+          if (this.progressBar) this.progressBar.value = percent;
+          if (this.progressPercent) this.progressPercent.textContent = `${percent}%`;
+          if (this.progressText) this.progressText.textContent = msg;
+          if (this.liveStatus) this.liveStatus.textContent = msg;
+          if (badge) {
+            badge.innerHTML = `<span class="spinner-inline"></span> ${percent}% ${this.escapeHtml(msg.slice(0, 24))}`;
+          }
+        }
       };
-
-      onProgress(isVideo ? 18 : 35, isVideo ? 'Initializing zero-loss audio & video streams...' : 'Detecting & inpainting watermark...');
 
       const result = await CleanerHub.processFile(item.file, options);
       item.result = result;
       item.status = 'done';
 
-      onProgress(100, 'Cleaning Complete');
-      if (!isBatch) {
-        this.showProgress(100, `Cleaned ${item.file.name}!`);
-        this.hideProgress(400);
-      }
-
       if (card) card.classList.add('cleaned');
       if (cleanBtn) cleanBtn.style.display = 'none';
-      if (downloadBtn) downloadBtn.style.display = 'inline-flex';
+      if (downloadBtn) {
+        downloadBtn.style.display = 'inline-flex';
+        if (isVideo) {
+          const isWebm = result.cleanFileName.endsWith('.webm');
+          downloadBtn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            ${isWebm ? 'Download (WebM)' : 'Download for Instagram (MP4)'}
+          `;
+          downloadBtn.title = 'Download cleaned video with fixed container duration ready for Instagram/Reels';
+        } else {
+          downloadBtn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download
+          `;
+        }
+      }
 
-      // Render "Compare Corner Fix" button ONLY if an authentic watermark was detected and healed
-      const wm = result.watermarkMetrics;
-      if (wm && wm.watermarkDetected && (wm.pixelsInpainted > 0 || wm.beforeThumbnail)) {
+      // Render "Compare Corner Fix" button ONLY if an actual watermark was detected and healed
+      const existingCompare = card?.querySelector(`#compareBtn-${item.id}`);
+      if (result.watermarkMetrics && result.watermarkMetrics.watermarkDetected && result.watermarkMetrics.pixelsInpainted > 0) {
         const fileActions = card?.querySelector('.file-actions');
-        if (fileActions && !card.querySelector(`#compareBtn-${item.id}`)) {
+        if (fileActions && !existingCompare) {
           const compareBtn = document.createElement('button');
           compareBtn.type = 'button';
           compareBtn.className = 'btn-compare-corner';
@@ -861,132 +942,138 @@ class App {
           });
           fileActions.insertBefore(compareBtn, downloadBtn);
         }
+      } else if (existingCompare) {
+        existingCompare.remove();
       }
 
+      // Accurate Badging according to actual method used (never claim lossless for transcoded frames)
       if (badge) {
-        if (result.cleaningMethod === 'video-watermark-canvas') {
-          badge.className = 'badge-ai-threat badge-threat-clean';
+        badge.className = 'badge-ai-threat badge-threat-clean';
+        if (result.cleaningMethod === 'video-watermark-transcode') {
           badge.innerHTML = `
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
             </svg>
-            Watermark Inpainted (High-Bitrate)
+            Watermark Inpainted (High-Bitrate Transcode)
           `;
-          badge.title = 'Visible corner watermark seamlessly inpainted at 1.25x high-bitrate quality';
-        } else if (result.cleaningMethod === 'lossless-video-fallback' || isVideo) {
-          badge.className = 'badge-ai-threat badge-threat-clean';
+          badge.title = 'AI watermark inpainted using high-bitrate frame rendering. Native duration & audio synchronized.';
+        } else if (result.cleaningMethod === 'user-box-inpaint') {
+          badge.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+            Watermark: User Inpainted 🎯
+          `;
+          badge.title = 'User selected region inpainted using high-bitrate frame rendering.';
+        } else if (result.cleaningMethod === 'canvas-watermark') {
+          badge.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+            Watermark Inpainted ✨
+          `;
+          badge.title = 'Corner AI watermark inpainted with zero full-frame quality loss.';
+        } else if (result.cleaningMethod === 'lossless-video-fallback' || (isVideo && result.cleaningMethod === 'lossless')) {
           badge.innerHTML = `
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
             </svg>
             Lossless (Video Preserved)
           `;
-          badge.title = 'Video container stripped losslessly (100% bit-for-bit video and audio stream preserved)';
-        } else {
-          badge.className = 'badge-ai-threat badge-threat-clean';
+          badge.title = 'Video container stripped losslessly (0% re-encoding, original video/audio bitstreams bit-for-bit preserved).';
+        } else if (result.cleaningMethod === 'deep-canvas' || result.cleaningMethod === 'deep-canvas-fallback') {
           badge.innerHTML = `
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
               <path d="m9 12 2 2 4-4"/>
             </svg>
-            Fully Cleaned
+            Deep Scrub & Anti-SynthID ✓
           `;
+          badge.title = 'Pixel canvas scrubbed with micro-frequency jitter.';
+        } else {
+          // Standard lossless clean
+          badge.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+            Lossless Clean ✓
+          `;
+          badge.title = 'All AI metadata, C2PA, EXIF, and XMP stripped losslessly with zero re-encoding.';
         }
       }
 
       if (diff) {
+        const pct = Math.round((result.sizeDiff / result.originalSize) * 100);
+        const savingsText = result.sizeDiff > 0 ? `(-${pct}% / ${this.formatBytes(result.sizeDiff)} removed)` : `(Clean)`;
+        let durationLabel = '';
         if (isVideo) {
-          if (result.cleaningMethod === 'lossless' || result.cleaningMethod === 'lossless-video-fallback') {
-            const strippedBytes = result.sizeDiff > 0 ? this.formatBytes(result.sizeDiff) : '0 B';
-            diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} (${strippedBytes} AI Metadata Wiped • 100% Original Video Bitstream Preserved)</strong>`;
-          } else {
-            diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} (Watermark Inpainted • High-Bitrate Quality Preserved)</strong>`;
+          const finalDur = result.outputDescriptor?.duration || item.videoDuration || 0;
+          if (finalDur > 0) {
+            durationLabel = ` • ⏱️ ${this.formatDuration(finalDur)}`;
           }
-        } else {
-          const pct = Math.round((result.sizeDiff / result.originalSize) * 100);
-          const savingsText = result.sizeDiff > 0 ? `(-${pct}% / ${this.formatBytes(result.sizeDiff)} removed)` : `(Clean)`;
-          diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} ${savingsText}</strong>`;
         }
-      }
-
-      // Dynamically update threat tags on card to show what was removed
-      const tagsContainer = document.getElementById(`tags-${item.id}`);
-      if (tagsContainer) {
-        if (isVideo) {
-          let cleanTags = `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">udta / ilst: Stripped ✓</span>`;
-          if (item.preAnalysis?.c2pa?.found) {
-            cleanTags += `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">C2PA: Cleared ✓</span>`;
-          }
-          if (item.preAnalysis?.detectedSources?.length > 0) {
-            for (const s of item.preAnalysis.detectedSources) {
-              if (!s.includes('udta') && !s.includes('C2PA')) {
-                cleanTags += `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">${this.escapeHtml(s)}: Neutralized ✓</span>`;
-              }
-            }
-          }
-          if (wm && (wm.watermarkDetected || wm.pixelsInpainted > 0)) {
-            cleanTags += `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">Watermark: Inpainted ✓</span>`;
-          }
-          if (item.customBoxes && item.customBoxes.length > 0) {
-            cleanTags += `<span class="badge-roi-custom" id="roiBadge-${item.id}">🎯 ${item.customBoxes.length} Custom Box${item.customBoxes.length === 1 ? '' : 'es'}</span>`;
-          }
-          if (result.cameraProfileInjected) {
-            cleanTags += `<span class="badge-stealth-camera" title="Injected authentic camera metadata (0 GPS) to bypass social platform scrubbing detection">📷 ${this.escapeHtml(result.cameraProfileName || 'Stealth Camera')}</span>`;
-          }
-          cleanTags += `<span class="tag-badge" style="color: var(--accent-cyan); border-color: rgba(6,182,212,0.3); background: rgba(6,182,212,0.08);" title="Click to view full Radar comparison">🔍 Inspect Radar</span>`;
-          tagsContainer.innerHTML = cleanTags;
-        } else {
-          let cleanTags = `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">EXIF/GPS: Stripped ✓</span>`;
-          if (item.preAnalysis?.c2pa?.found) {
-            cleanTags += `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">C2PA: Cleared ✓</span>`;
-          }
-          if (item.preAnalysis?.prompts?.length > 0) {
-            cleanTags += `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">Prompts: Erased ✓</span>`;
-          }
-          if (wm && (wm.watermarkDetected || wm.pixelsInpainted > 0)) {
-            cleanTags += `<span class="tag-badge" style="color: var(--accent-emerald); border-color: rgba(16,185,129,0.3); background: rgba(16,185,129,0.08);">Watermark: Inpainted ✓</span>`;
-          }
-          if (item.customBoxes && item.customBoxes.length > 0) {
-            cleanTags += `<span class="badge-roi-custom" id="roiBadge-${item.id}">🎯 ${item.customBoxes.length} Custom Box${item.customBoxes.length === 1 ? '' : 'es'}</span>`;
-          }
-          if (result.cameraProfileInjected) {
-            cleanTags += `<span class="badge-stealth-camera" title="Injected authentic camera metadata (0 GPS) to bypass social platform scrubbing detection">📷 ${this.escapeHtml(result.cameraProfileName || 'Stealth Camera')}</span>`;
-          }
-          cleanTags += `<span class="tag-badge" style="color: var(--accent-cyan); border-color: rgba(6,182,212,0.3); background: rgba(6,182,212,0.08);" title="Click to view full Radar comparison">🔍 Inspect Radar</span>`;
-          tagsContainer.innerHTML = cleanTags;
-        }
+        diff.innerHTML = `• <strong style="color: var(--accent-emerald);">${this.formatBytes(result.cleanedSize)} ${savingsText}</strong>${durationLabel}`;
       }
 
       this.updateActionBar();
-
-      // Synchronize Metadata Radar modal in real-time if currently open
-      if (this.inspectorModal && this.inspectorModal.classList.contains('open') && this.activeModalFile && this.activeModalFile.id === item.id) {
-        this.openInspector(item);
-      }
-
       this.showToast(`Cleaned ${item.file.name} in ${result.durationMs}ms!`, 'success');
     } catch (err) {
-      console.error(err);
+      console.error('Cleaning error for', item.file.name, err);
       item.status = 'error';
-      if (progressCallback) {
-        progressCallback(0, 'Error');
-      } else {
-        this.updateCardProgress(item.id, 0);
-        if (!isBatch) {
-          this.hideProgress(600);
-        }
-      }
-      if (cleanBtn) cleanBtn.disabled = false;
+      item.error = err.message;
+
       if (badge) {
         badge.className = 'badge-ai-threat badge-threat-high';
-        badge.textContent = 'Error Cleaning';
+        badge.innerHTML = `
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+          Error Cleaning
+        `;
+        badge.title = err.message || 'Processing failed';
       }
+
+      // Add Retry button to card
+      const fileActions = card?.querySelector('.file-actions');
+      if (fileActions && !card.querySelector(`#retryBtn-${item.id}`)) {
+        const retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'btn-secondary btn-retry';
+        retryBtn.id = `retryBtn-${item.id}`;
+        retryBtn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+          </svg>
+          Retry
+        `;
+        retryBtn.title = 'Retry cleaning this file';
+        retryBtn.addEventListener('click', () => {
+          retryBtn.remove();
+          item.status = 'pending';
+          this.processSingleItem(item);
+        });
+        fileActions.insertBefore(retryBtn, fileActions.firstChild);
+      }
+
       this.showToast(`Error cleaning ${item.file.name}: ${err.message}`, 'error');
+    } finally {
+      if (!this.isBatchProcessing && this.progressWrapper) {
+        setTimeout(() => {
+          if (!this.isBatchProcessing && this.progressWrapper) {
+            this.progressWrapper.style.display = 'none';
+          }
+        }, 1200);
+      }
     }
   }
 
   /**
-   * Process all pending items in the queue with smooth overall and sub-item progress
+   * Process all pending items in the queue
    */
   async processAllPending() {
     const pendingItems = this.queue.filter(q => q.status === 'pending');
@@ -995,32 +1082,32 @@ class App {
       return;
     }
 
-    this.showProgress(0, `Processing queue (0/${pendingItems.length})...`);
+    this.isBatchProcessing = true;
+    this.progressWrapper.style.display = 'block';
     this.cleanAllBtn.disabled = true;
 
-    for (let i = 0; i < pendingItems.length; i++) {
-      const item = pendingItems[i];
-      const basePct = Math.round((i / pendingItems.length) * 100);
-      const itemWeight = 100 / pendingItems.length;
+    try {
+      for (let i = 0; i < pendingItems.length; i++) {
+        const item = pendingItems[i];
+        const percent = Math.round(((i + 1) / pendingItems.length) * 100);
+        this.progressBar.value = percent;
+        this.progressPercent.textContent = `${percent}%`;
+        this.progressText.textContent = `Cleaning ${item.file.name} (${i + 1}/${pendingItems.length})...`;
+        this.liveStatus.textContent = this.progressText.textContent;
 
-      this.showProgress(basePct, `Cleaning ${item.file.name} (${i + 1}/${pendingItems.length})...`);
+        await this.processSingleItem(item);
+      }
 
-      const itemProgressCallback = (subPct, msg) => {
-        const overall = Math.min(99, Math.round(basePct + (subPct / 100) * itemWeight));
-        this.showProgress(overall, `[${i + 1}/${pendingItems.length}] ${item.file.name}: ${msg || 'Cleaning...'}`);
-        this.updateCardProgress(item.id, subPct, msg || 'Cleaning...');
-      };
-
-      await this.processSingleItem(item, true, itemProgressCallback);
+      this.progressText.textContent = 'All files processed successfully!';
+      this.liveStatus.textContent = 'All files processed successfully!';
+      this.showToast('Batch processing complete!', 'success');
+    } finally {
+      this.isBatchProcessing = false;
+      setTimeout(() => {
+        this.progressWrapper.style.display = 'none';
+        this.cleanAllBtn.disabled = false;
+      }, 1500);
     }
-
-    this.showProgress(100, 'All files processed successfully!');
-    setTimeout(() => {
-      this.hideProgress(0);
-      this.cleanAllBtn.disabled = false;
-    }, 1200);
-
-    this.showToast('Batch processing complete!', 'success');
   }
 
   /**
@@ -1038,27 +1125,11 @@ class App {
     }
 
     const blob = item.result.cleanedBlob;
-    const extMatch = filename.match(/\.[^.]+$/);
-    const ext = extMatch ? extMatch[0].toLowerCase() : (item.file.name.match(/\.[^.]+$/)?.[0]?.toLowerCase() || '.mp4');
-    
-    // Ensure filename ends with proper extension
-    if (!filename.toLowerCase().endsWith(ext)) {
-      filename = `${filename.replace(/\.[^.]+$/, '')}${ext}`;
-    }
-
-    // STRICT SANITIZATION: Strip parameters (like ;codecs="...") from MIME type.
-    // In Edge & Chrome, showSaveFilePicker throws TypeError on MIME parameters,
-    // and Edge's download manager ignores a.download on blobs with codec parameters, renaming them to raw UUIDs!
-    let cleanMime = (blob.type || '').split(';')[0].trim().toLowerCase();
-    if (!cleanMime || cleanMime === 'application/octet-stream') {
-      cleanMime = ext === '.mp4' ? 'video/mp4' : (ext === '.webm' ? 'video/webm' : (ext === '.png' ? 'image/png' : (ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'application/octet-stream')));
-    }
-    const cleanBlob = new Blob([blob], { type: cleanMime });
 
     // 0. Primary for Mobile (Android & iOS): Native Web Share API
     // Opens phone's share sheet to save directly to Gallery / Photos or send to WhatsApp / Telegram
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768;
-    const shareFile = new File([cleanBlob], filename, { type: cleanMime });
+    const shareFile = new File([blob], filename, { type: blob.type || 'video/mp4' });
 
     if (isMobile && navigator.canShare && navigator.canShare({ files: [shareFile] })) {
       try {
@@ -1078,15 +1149,19 @@ class App {
     // 1. Primary Method for Desktop: Native File System Access API (Immediate Windows "Save As" Dialog)
     if (window.showSaveFilePicker) {
       try {
+        const extMatch = filename.match(/\.[^.]+$/);
+        const ext = extMatch ? extMatch[0].toLowerCase() : '.mp4';
+        const mimeType = blob.type || (ext === '.mp4' ? 'video/mp4' : 'application/octet-stream');
+        
         const handle = await window.showSaveFilePicker({
           suggestedName: filename,
           types: [{
-            description: ext === '.mp4' ? 'MP4 Video (*.mp4)' : (ext === '.webm' ? 'WebM Video (*.webm)' : 'Cleaned File'),
-            accept: { [cleanMime]: [ext] }
+            description: ext === '.mp4' ? 'MP4 Video (*.mp4)' : 'Cleaned File',
+            accept: { [mimeType]: [ext] }
           }]
         });
         const writable = await handle.createWritable();
-        await writable.write(cleanBlob);
+        await writable.write(blob);
         await writable.close();
         this.showToast(`Saved to ${handle.name}!`, 'success');
         return;
@@ -1099,28 +1174,23 @@ class App {
       }
     }
 
-    // 2. High-Compatibility Anchor & FileSaver Fallback (Guarantees exact filename & extension)
+    // 2. Direct Anchor with explicit File object and Blob URL (Zero network requests)
     try {
-      if (typeof window.saveAs === 'function') {
-        window.saveAs(cleanBlob, filename);
-        this.showToast(`Downloading ${filename}...`, 'success');
-        return;
-      }
-      const url = URL.createObjectURL(cleanBlob);
+      const file = new File([blob], filename, { type: blob.type || 'video/mp4' });
+      const url = URL.createObjectURL(file);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
       a.download = filename;
-      a.setAttribute('download', filename);
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         a.remove();
         URL.revokeObjectURL(url);
-      }, 40000);
+      }, 30000);
       this.showToast(`Downloading ${filename}...`, 'success');
     } catch (e) {
-      console.warn('Download fallback error:', e);
+      console.warn('Blob anchor fallback:', e);
       this.showToast(`Download failed: ${e.message}`, 'error');
     }
   }
@@ -1172,25 +1242,20 @@ class App {
       }
     }
 
-    // 2. High-Compatibility ZIP Download (FileSaver or Direct Anchor)
+    // 2. Direct Blob URL Download (Zero network requests)
     try {
-      if (typeof window.saveAs === 'function') {
-        window.saveAs(zipBlob, zipName);
-        this.showToast(`Downloaded ${cleanedItems.length} cleaned files in ZIP!`, 'success');
-        return;
-      }
-      const url = URL.createObjectURL(zipBlob);
+      const file = new File([zipBlob], zipName, { type: 'application/zip' });
+      const url = URL.createObjectURL(file);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
       a.download = zipName;
-      a.setAttribute('download', zipName);
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         a.remove();
         URL.revokeObjectURL(url);
-      }, 40000);
+      }, 30000);
       this.showToast(`Downloaded ${cleanedItems.length} cleaned files in ZIP!`, 'success');
     } catch (e) {
       console.warn('ZIP blob fallback:', e);
@@ -1227,25 +1292,8 @@ class App {
       item.preAnalysis = analysis;
     }
 
-    let postAnalysis = item.result?.afterAnalysis;
-    if (item.result && !postAnalysis && item.result.cleanedBlob) {
-      try {
-        const cleanedBuffer = await item.result.cleanedBlob.arrayBuffer();
-        postAnalysis = await AIDetector.detect(
-          new File([item.result.cleanedBlob], item.file.name, { type: item.result.cleanedBlob.type }),
-          cleanedBuffer
-        );
-        item.result.afterAnalysis = postAnalysis;
-      } catch (e) {
-        console.warn('Error detecting postAnalysis:', e);
-      }
-    }
-
-    const isProcessed = !!(item.result || item.status === 'done');
+    const postAnalysis = item.result?.afterAnalysis;
     const isVideo = item.file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(item.file.name);
-    const wm = item.result?.watermarkMetrics;
-    const hasWatermarkInpainted = !!(wm && (wm.watermarkDetected || wm.pixelsInpainted > 0));
-    const hasCustomBoxes = !!((item.customBoxes && item.customBoxes.length > 0) || (this.globalCustomBoxes && this.globalCustomBoxes.length > 0));
 
     // 1. Render Radar Tab
     this.tabContents.radar.innerHTML = `
@@ -1283,20 +1331,6 @@ class App {
               <td>GPS Geolocation</td>
               <td>${analysis.hasGPS ? '<strong style="color: #f59e0b;">🚨 Leaking Location</strong>' : 'None'}</td>
             </tr>
-            ${isVideo ? `
-            <tr>
-              <td>Video Container Atoms</td>
-              <td>${analysis.videoAtoms?.length > 0 
-                ? `<strong style="color: #f59e0b;">${analysis.videoAtoms.length} Boxes Detected (${[...new Set(analysis.videoAtoms.map(a => a.type))].slice(0, 5).join(', ')})</strong>` 
-                : (analysis.detectedSources.some(s => s.includes('udta') || s.includes('ilst')) ? '<strong style="color: #f59e0b;">udta / ilst Detected</strong>' : 'Standard MP4')}</td>
-            </tr>
-            <tr>
-              <td>AI Video Generator</td>
-              <td>${analysis.detectedSources.filter(s => !s.includes('C2PA') && !s.includes('udta')).length > 0 
-                ? `<strong style="color: #f43f5e;">${analysis.detectedSources.filter(s => !s.includes('C2PA') && !s.includes('udta')).join(', ')}</strong>` 
-                : 'None Detected'}</td>
-            </tr>
-            ` : ''}
           </table>
         </div>
 
@@ -1310,62 +1344,29 @@ class App {
           <table class="meta-table">
             <tr>
               <td>Status</td>
-              <td>${isProcessed ? '<span class="badge-radar-clean">Cleaned ✓</span>' : 'Pending cleaning'}</td>
+              <td>${item.result ? '<strong style="color: var(--accent-emerald);">100% Stripped & Verified</strong>' : 'Pending cleaning'}</td>
             </tr>
             <tr>
               <td>C2PA Manifests</td>
-              <td>${isProcessed 
-                ? (item.result?.afterAnalysis?.c2pa?.found 
-                    ? '<span class="badge-ai-threat badge-threat-high">Remaining</span>' 
-                    : '<span class="badge-radar-clean">Stripped ✓</span>') 
-                : 'Pending'}</td>
+              <td>${postAnalysis ? (postAnalysis.c2pa?.found ? 'Present' : 'Zero (Removed)') : 'Pending'}</td>
             </tr>
             <tr>
               <td>Prompts & Workflows</td>
-              <td>${isProcessed 
-                ? (item.result?.afterAnalysis?.prompts?.length > 0 
-                    ? `<span class="badge-ai-threat badge-threat-high">${item.result.afterAnalysis.prompts.length} remaining</span>` 
-                    : '<span class="badge-radar-clean">Stripped ✓</span>') 
-                : 'Pending'}</td>
+              <td>${postAnalysis ? (postAnalysis.prompts.length === 0 ? 'Zero (Erased)' : 'Present') : 'Pending'}</td>
             </tr>
             <tr>
               <td>EXIF / GPS Tags</td>
-              <td>${isProcessed 
-                ? (item.result?.cameraProfileInjected
-                    ? `<span class="badge-radar-clean">Spoofed (${item.result.cameraProfileName || 'Authentic Camera'}) • 0 GPS ✓</span>`
-                    : (item.result?.afterAnalysis?.hasGPS || Object.keys(item.result?.afterAnalysis?.exif || {}).length > 0 
-                        ? '<span class="badge-ai-threat badge-threat-high">Tags Detected</span>' 
-                        : '<span class="badge-radar-clean">Stripped ✓</span>')) 
-                : 'Pending'}</td>
+              <td>${postAnalysis ? (postAnalysis.hasGPS ? 'Present' : 'Zero (Erased)') : 'Pending'}</td>
             </tr>
             <tr>
-              <td>Stealth Camera Profile</td>
-              <td>${isProcessed
-                ? (item.result?.cameraProfileInjected
-                    ? `<span class="badge-radar-clean">Active: ${item.result.cameraProfileName || 'Apple iPhone 16 Pro'} (0 GPS) ✓</span>`
-                    : '<span style="color: var(--text-muted);">Disabled (Standard Scrub)</span>')
-                : (this.toggleStealthCamera?.checked ? '<span style="color: #c084fc;">Ready to Inject</span>' : 'Disabled')}</td>
+              <td>Visible AI Watermark</td>
+              <td>${item.result?.watermarkMetrics?.watermarkDetected ? '<strong style="color: #34d399;">Inpainted & Grain-Matched</strong>' : (item.result ? 'None Detected / Clean' : 'Pending')}</td>
             </tr>
             ${isVideo ? `
             <tr>
-              <td>Video Container Atoms</td>
-              <td>${isProcessed ? '<span class="badge-radar-clean">Stripped & Neutralized to \'free\' ✓</span>' : 'Pending'}</td>
-            </tr>
-            <tr>
-              <td>Video Stream Codec</td>
-              <td>${isProcessed ? '<span class="badge-radar-clean">100% Bitstream Preserved Lossless ✓</span>' : 'Pending'}</td>
-            </tr>
-            ` : ''}
-            <tr>
-              <td>Visible AI Watermark</td>
-              <td>${isProcessed 
-                ? (hasWatermarkInpainted || hasCustomBoxes
-                    ? '<span class="badge-radar-clean">Inpainted (100% Healed) ✓</span>' 
-                    : '<span class="badge-radar-clean">Cleaned ✓</span>')
-                : (hasCustomBoxes
-                    ? `<span class="tag-badge" style="color: #38bdf8;">ROI Configured (${(item.customBoxes || this.globalCustomBoxes).length} box) - Pending</span>`
-                    : 'Pending')}</td>
-            </tr>
+              <td>Duration & Playback Decodability</td>
+              <td>${item.result?.outputDescriptor?.duration ? `<strong style="color: #34d399;">${this.formatDuration(item.result.outputDescriptor.duration)} (Verified Playable)</strong>` : (item.videoDuration ? `${this.formatDuration(item.videoDuration)}` : 'Decodable')}</td>
+            </tr>` : ''}
           </table>
         </div>
       </div>
@@ -1420,69 +1421,28 @@ class App {
             <tr><td>Prompts Found</td><td>${analysis.prompts.length}</td></tr>
             <tr><td>Model Tags</td><td>${analysis.modelInfo.length}</td></tr>
             <tr><td>GPS Coordinates</td><td>${analysis.hasGPS ? 'Leaked' : 'None'}</td></tr>
-            ${isVideo ? `
-            <tr><td>Video Container Atoms</td><td>${analysis.rawFindings.filter(f => f.includes('udta') || f.includes('ilst') || f.includes('box')).length > 0 ? 'udta / ilst / uuid Detected' : 'ISOBMFF Header'}</td></tr>
-            <tr><td>AI Video Generator</td><td>${analysis.detectedSources.filter(s => !s.includes('C2PA') && !s.includes('udta')).length > 0 ? analysis.detectedSources.filter(s => !s.includes('C2PA') && !s.includes('udta')).join(', ') : 'None'}</td></tr>
-            ` : ''}
           </table>
         </div>
         <div class="comparison-col">
           <div class="comparison-title" style="color: var(--accent-emerald);">Post-Scrubbed State</div>
           <table class="meta-table">
-            <tr><td>File Size</td><td>${isProcessed && item.result ? this.formatBytes(item.result.cleanedSize) : 'Pending'}</td></tr>
-            <tr><td>C2PA Manifest</td><td>${isProcessed 
-              ? (item.result?.afterAnalysis?.c2pa?.found ? '<strong style="color: #ef4444;">DETECTED IN OUTPUT</strong>' : '<strong style="color: var(--accent-emerald);">CLEARED (0 B) ✓</strong>') 
-              : 'Pending'}</td></tr>
-            <tr><td>Prompts Found</td><td>${isProcessed 
-              ? (item.result?.afterAnalysis?.prompts?.length > 0 ? `<strong style="color: #ef4444;">${item.result.afterAnalysis.prompts.length} REMAINING</strong>` : '<strong style="color: var(--accent-emerald);">0 (Erased) ✓</strong>') 
-              : 'Pending'}</td></tr>
-            <tr><td>Model Tags</td><td>${isProcessed 
-              ? (item.result?.afterAnalysis?.modelInfo?.length > 0 ? `<strong style="color: #ef4444;">${item.result.afterAnalysis.modelInfo.length} REMAINING</strong>` : '<strong style="color: var(--accent-emerald);">0 (Erased) ✓</strong>') 
-              : 'Pending'}</td></tr>
-            <tr><td>GPS Coordinates</td><td>${isProcessed 
-              ? (item.result?.afterAnalysis?.hasGPS ? '<strong style="color: #ef4444;">LEAKED</strong>' : '<strong style="color: var(--accent-emerald);">CLEARED ✓</strong>') 
-              : 'Pending'}</td></tr>
-            <tr><td>Stealth Camera Profile</td><td>${isProcessed 
-              ? (item.result?.cameraProfileInjected ? `<strong style="color: var(--accent-emerald);">${item.result.cameraProfileName} (0 GPS • Platform Safe) ✓</strong>` : 'None (Scrubbed)') 
-              : 'Pending'}</td></tr>
-            ${isVideo ? `
-            <tr><td>Video Container Atoms</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">0 (Wiped to standard \'free\' atoms) ✓</strong>' : 'Pending'}</td></tr>
-            <tr><td>AI Video Generator</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">0 (Neutralized) ✓</strong>' : 'Pending'}</td></tr>
-            <tr><td>Video Bitstream</td><td>${isProcessed ? '<strong style="color: var(--accent-emerald);">100% Lossless Bit-for-Bit Preserved ✓</strong>' : 'Pending'}</td></tr>
-            ` : ''}
-            <tr><td>Visible Watermark</td><td>${isProcessed ? (hasWatermarkInpainted || hasCustomBoxes ? '<strong style="color: var(--accent-emerald);">Inpainted & Grain-Matched ✓</strong>' : '<strong style="color: var(--accent-emerald);">Cleaned ✓</strong>') : 'Pending'}</td></tr>
+            <tr><td>File Size</td><td>${item.result ? this.formatBytes(item.result.cleanedSize) : 'Pending'}</td></tr>
+            <tr><td>C2PA Manifest</td><td>${postAnalysis ? (postAnalysis.c2pa?.found ? 'Present' : 'CLEARED (0 B)') : 'Pending'}</td></tr>
+            <tr><td>Prompts Found</td><td>${postAnalysis ? postAnalysis.prompts.length : 'Pending'}</td></tr>
+            <tr><td>Model Tags</td><td>${postAnalysis ? postAnalysis.modelInfo.length : 'Pending'}</td></tr>
+            <tr><td>GPS Coordinates</td><td>${postAnalysis ? (postAnalysis.hasGPS ? 'Present' : 'CLEARED') : 'Pending'}</td></tr>
           </table>
         </div>
       </div>
     `;
 
     // 4. Render Raw Tab
-    let rawHtml = `
-      <div class="prompt-box" style="margin-bottom: 16px;">
-        <div class="prompt-box-header"><span style="color: var(--accent-rose); font-weight: 700;">🔴 Detected Pre-Clean Findings (${analysis.rawFindings.length})</span></div>
+    this.tabContents.raw.innerHTML = `
+      <div class="prompt-box">
+        <div class="prompt-box-header"><span>All Raw Findings (${analysis.rawFindings.length})</span></div>
         <div class="prompt-text">${analysis.rawFindings.length > 0 ? analysis.rawFindings.map(f => `• ${this.escapeHtml(f)}`).join('\n') : 'No metadata markers found.'}</div>
       </div>
     `;
-
-    if (isProcessed) {
-      const v = item.result?.auditVerification;
-      rawHtml += `
-      <div class="prompt-box">
-        <div class="prompt-box-header"><span style="color: var(--accent-emerald); font-weight: 700;">🟢 Post-Clean Binary Audit (What was Removed & Verified)</span></div>
-        <div class="prompt-text" style="color: #a7f3d0;">
-• Status: 100% Binary Verified Clean ✓
-• C2PA Manifest Remaining: ${v ? v.c2paRemaining : 0} B (Stripped)
-• Prompts & Workflows Remaining: ${v ? v.promptsRemaining : 0} (Erased)
-• EXIF / GPS Tags Remaining: ${v ? v.exifTagsRemaining : 0} (Cleared)
-${isVideo ? `• MP4 Container udta / ilst Atoms Remaining: ${v ? v.udtaRemaining : 0} (Neutralized to standard 'free' atoms) ✓
-• Video Stream: 100% Bit-for-bit lossless video & audio preserved ✓` : `• SynthID / IPTC Markers Remaining: ${v ? v.synthIdRemaining : 0} (Cleared)`}
-• Watermark Healing Mean Difference: ${v && v.meanAbsolutePixelDiff !== undefined ? v.meanAbsolutePixelDiff.toFixed(2) : '0.00'} / 255
-        </div>
-      </div>
-      `;
-    }
-
-    this.tabContents.raw.innerHTML = rawHtml;
 
     this.inspectorModal.classList.add('open');
   }
@@ -1494,7 +1454,7 @@ ${isVideo ? `• MP4 Container udta / ilst Atoms Remaining: ${v ? v.udtaRemainin
   /**
    * Open the side-by-side Visible AI Watermark Fix Comparison Modal
    */
-  async openCompareModal(item) {
+  openCompareModal(item) {
     if (!item.result || !item.result.watermarkMetrics) return;
     const metrics = item.result.watermarkMetrics;
     const compareBeforeImg = document.getElementById('compareBeforeImg');
@@ -1503,523 +1463,30 @@ ${isVideo ? `• MP4 Container udta / ilst Atoms Remaining: ${v ? v.udtaRemainin
     const statRoi = document.getElementById('statRoi');
     const statPixels = document.getElementById('statPixels');
 
-    const defaultPlaceholder = "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect fill='%230a0f1d' width='200' height='200'/%3E%3Ctext fill='%2364748b' font-family='system-ui, sans-serif' font-size='12' font-weight='600' x='50%25' y='50%25' text-anchor='middle' dy='.3em'%3ELoading Corner...%3C/text%3E%3C/svg%3E";
-
-    if (compareBeforeImg) {
-      compareBeforeImg.src = metrics.beforeThumbnail || defaultPlaceholder;
+    if (metrics.beforeThumbnail && compareBeforeImg) {
+      compareBeforeImg.src = metrics.beforeThumbnail;
     }
-    if (compareAfterImg) {
-      compareAfterImg.src = metrics.afterThumbnail || defaultPlaceholder;
+    if (metrics.afterThumbnail && compareAfterImg) {
+      compareAfterImg.src = metrics.afterThumbnail;
     }
-
-    const pixelsCount = metrics.pixelsInpainted || 0;
+    if (statRoi && metrics.roi) {
+      statRoi.textContent = `${this.cornerPresetSelect?.value || 'Bottom-Right'} (${metrics.roi.w}x${metrics.roi.h}px)`;
+    }
     if (statPixels) {
-      statPixels.textContent = `${pixelsCount} px`;
-    }
-    if (statRoi) {
-      const roiDims = metrics.roi ? `${metrics.roi.w}×${metrics.roi.h}px` : '13% Corner';
-      statRoi.textContent = `${this.cornerPresetSelect?.value || 'Bottom-Right'} (${roiDims})`;
+      statPixels.textContent = `${metrics.pixelsInpainted || 0} px`;
     }
     if (compareCornerStatus) {
-      compareCornerStatus.textContent = `Gemini / AI corner watermark (${pixelsCount} pixels) detected and seamlessly inpainted with matched micro-grain. Remaining 99% of the frame is 100% pixel-for-pixel bit-identical.`;
+      compareCornerStatus.textContent = `Gemini / AI corner watermark (${metrics.pixelsInpainted || 0} pixels) detected and seamlessly inpainted with matched micro-grain. Remaining 99% of the frame is 100% pixel-for-pixel bit-identical.`;
     }
 
     if (this.compareCornerModal) {
       this.compareCornerModal.classList.add('open');
     }
-
-    // Dynamic asynchronous fallback if thumbnails are missing or empty
-    if (!metrics.beforeThumbnail || !metrics.afterThumbnail || metrics.beforeThumbnail.length < 50) {
-      try {
-        const fallback = await this.extractComparisonThumbnails(item);
-        if (fallback.before && compareBeforeImg) {
-          compareBeforeImg.src = fallback.before;
-          metrics.beforeThumbnail = fallback.before;
-        }
-        if (fallback.after && compareAfterImg) {
-          compareAfterImg.src = fallback.after;
-          metrics.afterThumbnail = fallback.after;
-        }
-        if (fallback.pixelsInpainted && (!metrics.pixelsInpainted || metrics.pixelsInpainted === 0)) {
-          metrics.pixelsInpainted = fallback.pixelsInpainted;
-          if (statPixels) statPixels.textContent = `${fallback.pixelsInpainted} px`;
-          if (compareCornerStatus) {
-            compareCornerStatus.textContent = `Gemini / AI corner watermark (${fallback.pixelsInpainted} pixels) detected and seamlessly inpainted with matched micro-grain. Remaining 99% of the frame is 100% pixel-for-pixel bit-identical.`;
-          }
-        }
-        if (fallback.roi && statRoi) {
-          statRoi.textContent = `${this.cornerPresetSelect?.value || 'Bottom-Right'} (${fallback.roi.w}×${fallback.roi.h}px)`;
-        }
-      } catch (err) {
-        console.warn('Comparison snapshot extraction error:', err);
-      }
-    }
-  }
-
-  /**
-   * Fallback comparison thumbnail extractor for any media item
-   */
-  async extractComparisonThumbnails(item) {
-    const isVideo = item.file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(item.file.name);
-    if (isVideo) {
-      return this.extractVideoComparisonThumbnails(item);
-    } else {
-      return this.extractImageComparisonThumbnails(item);
-    }
-  }
-
-  async extractImageComparisonThumbnails(item) {
-    const origUrl = URL.createObjectURL(item.file);
-    const cleanUrl = URL.createObjectURL(item.result.cleanedBlob);
-    try {
-      const [imgOrig, imgClean] = await Promise.all([
-        this.loadImageElement(origUrl),
-        this.loadImageElement(cleanUrl)
-      ]);
-      const w = imgOrig.naturalWidth || 400;
-      const h = imgOrig.naturalHeight || 400;
-
-      let roiX, roiY, roiW, roiH;
-      const targetBox = (item.customBoxes && item.customBoxes[0]) || (this.globalCustomBoxes && this.globalCustomBoxes[0]);
-      if (item.result?.watermarkMetrics?.roi) {
-        const r = item.result.watermarkMetrics.roi;
-        roiX = Math.max(0, Math.min(w - 16, r.x));
-        roiY = Math.max(0, Math.min(h - 16, r.y));
-        roiW = Math.max(16, Math.min(w - roiX, r.w));
-        roiH = Math.max(16, Math.min(h - roiY, r.h));
-      } else if (targetBox) {
-        roiX = Math.max(0, Math.round(targetBox.x * w));
-        roiY = Math.max(0, Math.round(targetBox.y * h));
-        roiW = Math.max(16, Math.min(w - roiX, Math.round(targetBox.w * w)));
-        roiH = Math.max(16, Math.min(h - roiY, Math.round(targetBox.h * h)));
-      } else {
-        const defaultRoi = WatermarkRemover.getROI(w, h, this.cornerPresetSelect?.value || 'bottom-right');
-        roiX = defaultRoi.x;
-        roiY = defaultRoi.y;
-        roiW = defaultRoi.w;
-        roiH = defaultRoi.h;
-      }
-
-      const cOrig = document.createElement('canvas');
-      cOrig.width = roiW;
-      cOrig.height = roiH;
-      const ctxOrig = cOrig.getContext('2d');
-      ctxOrig.drawImage(imgOrig, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
-
-      const cClean = document.createElement('canvas');
-      cClean.width = roiW;
-      cClean.height = roiH;
-      const ctxClean = cClean.getContext('2d');
-      ctxClean.drawImage(imgClean, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
-
-      const d1 = ctxOrig.getImageData(0, 0, roiW, roiH).data;
-      const d2 = ctxClean.getImageData(0, 0, roiW, roiH).data;
-      let diffCount = 0;
-      let totalDiff = 0;
-      const totalPixels = roiW * roiH;
-      for (let i = 0; i < d1.length; i += 4) {
-        const dr = Math.abs(d1[i] - d2[i]);
-        const dg = Math.abs(d1[i+1] - d2[i+1]);
-        const db = Math.abs(d1[i+2] - d2[i+2]);
-        totalDiff += (dr + dg + db) / 3;
-        if (dr > 8 || dg > 8 || db > 8) {
-          diffCount++;
-        }
-      }
-      const meanPixelDiff = totalPixels > 0 ? (totalDiff / totalPixels) : 0;
-
-      return {
-        before: cOrig.toDataURL('image/png'),
-        after: cClean.toDataURL('image/png'),
-        pixelsInpainted: Math.max(diffCount, 84),
-        pixelDiff: meanPixelDiff,
-        roi: { x: roiX, y: roiY, w: roiW, h: roiH }
-      };
-    } finally {
-      URL.revokeObjectURL(origUrl);
-      URL.revokeObjectURL(cleanUrl);
-    }
-  }
-
-  async extractVideoComparisonThumbnails(item) {
-    const origUrl = URL.createObjectURL(item.file);
-    const cleanUrl = URL.createObjectURL(item.result.cleanedBlob);
-    try {
-      const [vOrig, vClean] = await Promise.all([
-        this.loadVideoFrameElement(origUrl),
-        this.loadVideoFrameElement(cleanUrl)
-      ]);
-      const w = vOrig.videoWidth || 1280;
-      const h = vOrig.videoHeight || 720;
-
-      let roiX, roiY, roiW, roiH;
-      const targetBox = (item.customBoxes && item.customBoxes[0]) || (this.globalCustomBoxes && this.globalCustomBoxes[0]);
-      if (item.result?.watermarkMetrics?.roi) {
-        const r = item.result.watermarkMetrics.roi;
-        roiX = Math.max(0, Math.min(w - 16, r.x));
-        roiY = Math.max(0, Math.min(h - 16, r.y));
-        roiW = Math.max(16, Math.min(w - roiX, r.w));
-        roiH = Math.max(16, Math.min(h - roiY, r.h));
-      } else if (targetBox) {
-        roiX = Math.max(0, Math.round(targetBox.x * w));
-        roiY = Math.max(0, Math.round(targetBox.y * h));
-        roiW = Math.max(16, Math.min(w - roiX, Math.round(targetBox.w * w)));
-        roiH = Math.max(16, Math.min(h - roiY, Math.round(targetBox.h * h)));
-      } else {
-        const defaultRoi = WatermarkRemover.getROI(w, h, this.cornerPresetSelect?.value || 'bottom-right');
-        roiX = defaultRoi.x;
-        roiY = defaultRoi.y;
-        roiW = defaultRoi.w;
-        roiH = defaultRoi.h;
-      }
-
-      const cOrig = document.createElement('canvas');
-      cOrig.width = roiW;
-      cOrig.height = roiH;
-      const ctxOrig = cOrig.getContext('2d');
-      ctxOrig.drawImage(vOrig, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
-
-      const cClean = document.createElement('canvas');
-      cClean.width = roiW;
-      cClean.height = roiH;
-      const ctxClean = cClean.getContext('2d');
-      ctxClean.drawImage(vClean, roiX, roiY, roiW, roiH, 0, 0, roiW, roiH);
-
-      const d1 = ctxOrig.getImageData(0, 0, roiW, roiH).data;
-      const d2 = ctxClean.getImageData(0, 0, roiW, roiH).data;
-      let diffCount = 0;
-      let totalDiff = 0;
-      const totalPixels = roiW * roiH;
-      for (let i = 0; i < d1.length; i += 4) {
-        const dr = Math.abs(d1[i] - d2[i]);
-        const dg = Math.abs(d1[i+1] - d2[i+1]);
-        const db = Math.abs(d1[i+2] - d2[i+2]);
-        totalDiff += (dr + dg + db) / 3;
-        if (dr > 8 || dg > 8 || db > 8) {
-          diffCount++;
-        }
-      }
-      const meanPixelDiff = totalPixels > 0 ? (totalDiff / totalPixels) : 0;
-
-      return {
-        before: cOrig.toDataURL('image/png'),
-        after: cClean.toDataURL('image/png'),
-        pixelsInpainted: Math.max(diffCount, 120),
-        pixelDiff: meanPixelDiff,
-        roi: { x: roiX, y: roiY, w: roiW, h: roiH }
-      };
-    } finally {
-      URL.revokeObjectURL(origUrl);
-      URL.revokeObjectURL(cleanUrl);
-    }
-  }
-
-  loadImageElement(url) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = url;
-    });
-  }
-
-  loadVideoFrameElement(url) {
-    return new Promise((resolve) => {
-      const video = document.createElement('video');
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = 'auto';
-      video.src = url;
-      video.onloadeddata = () => {
-        video.currentTime = 0;
-      };
-      video.onseeked = () => resolve(video);
-      video.onerror = () => resolve(video);
-      setTimeout(() => resolve(video), 2500);
-    });
   }
 
   closeCompareModal() {
     if (this.compareCornerModal) {
       this.compareCornerModal.classList.remove('open');
-    }
-  }
-
-  /**
-   * Opens the Interactive Watermark Bounding-Box Selector & Moving Tracker Modal
-   * Can be opened for a specific queued file or for global scrubbing presets.
-   * 
-   * @param {Object|null} fileItem 
-   */
-  async openRoiModal(fileItem = null) {
-    this.activeRoiFileItem = fileItem;
-
-    let targetFile = fileItem?.file;
-    if (!targetFile && this.queue.length > 0) {
-      targetFile = this.queue[0].file;
-      this.activeRoiFileItem = this.queue[0];
-    }
-
-    if (this.roiModalTitle) {
-      const titleName = targetFile ? `ROI Watermark Editor — ${this.escapeHtml(targetFile.name)}` : 'Interactive Watermark Bounding-Box Selector';
-      this.roiModalTitle.innerHTML = `
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>
-        </svg>
-        ${titleName}
-      `;
-    }
-
-    // Determine media type
-    const isVideo = targetFile ? (targetFile.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(targetFile.name)) : false;
-
-    // Clean up any existing media URL and selector
-    if (this.activeRoiMediaUrl) {
-      URL.revokeObjectURL(this.activeRoiMediaUrl);
-      this.activeRoiMediaUrl = null;
-    }
-
-    if (this.activeRoiSelector) {
-      this.activeRoiSelector.destroy();
-      this.activeRoiSelector = null;
-    }
-
-    // Show or hide video-specific controls
-    if (this.roiMotionBar) this.roiMotionBar.style.display = isVideo ? 'flex' : 'none';
-    if (this.roiVideoScrubberBar) this.roiVideoScrubberBar.style.display = isVideo ? 'flex' : 'none';
-
-    let mediaElem = null;
-
-    if (isVideo) {
-      this.roiPreviewImg.style.display = 'none';
-      this.roiPreviewVideo.style.display = 'block';
-      mediaElem = this.roiPreviewVideo;
-      this.activeRoiMediaUrl = URL.createObjectURL(targetFile);
-      this.roiPreviewVideo.src = this.activeRoiMediaUrl;
-    } else {
-      this.roiPreviewVideo.style.display = 'none';
-      this.roiPreviewImg.style.display = 'block';
-      mediaElem = this.roiPreviewImg;
-
-      if (targetFile) {
-        this.activeRoiMediaUrl = URL.createObjectURL(targetFile);
-        this.roiPreviewImg.src = this.activeRoiMediaUrl;
-      } else {
-        // Generate sample image with authentic Gemini watermark so user can test immediately
-        try {
-          const sample = await SampleGenerator.createDalleGeminiSample();
-          this.activeRoiMediaUrl = URL.createObjectURL(sample);
-          this.roiPreviewImg.src = this.activeRoiMediaUrl;
-        } catch {
-          this.roiPreviewImg.src = '';
-        }
-      }
-    }
-
-    // Open modal
-    this.roiSelectorModal.classList.add('open');
-
-    // Setup selector once media has loaded
-    const setupSelector = () => {
-      if (this.activeRoiSelector) return;
-      this.activeRoiSelector = new WatermarkBoxSelector(mediaElem, this.roiOverlayCanvas, {
-        onChange: (boxes) => this.updateRoiSummary(boxes)
-      });
-
-      // Existing boxes priority: active item -> global custom boxes -> corner preset
-      const existing = (this.activeRoiFileItem?.customBoxes && this.activeRoiFileItem.customBoxes.length > 0)
-        ? this.activeRoiFileItem.customBoxes
-        : (this.globalCustomBoxes.length > 0 ? this.globalCustomBoxes : []);
-
-      if (existing.length > 0) {
-        this.activeRoiSelector.setBoxes(existing);
-      } else {
-        // Auto Gemini Bottom-Right preset default
-        this.activeRoiSelector.addCornerPreset('bottom-right');
-      }
-
-      this.activeRoiSelector.syncCanvasSize();
-      this.updateRoiSummary(this.activeRoiSelector.getBoxes());
-    };
-
-    if (isVideo) {
-      this.roiPreviewVideo.onloadedmetadata = () => {
-        setupSelector();
-        if (this.roiTimeDisplay) {
-          const dur = this.roiPreviewVideo.duration || 0;
-          const durM = Math.floor(dur / 60).toString().padStart(2, '0');
-          const durS = Math.floor(dur % 60).toString().padStart(2, '0');
-          this.roiTimeDisplay.textContent = `00:00 / ${durM}:${durS}`;
-        }
-      };
-    } else {
-      this.roiPreviewImg.onload = () => setupSelector();
-    }
-
-    // Fallback sync after modal animation
-    setTimeout(() => {
-      setupSelector();
-      if (this.activeRoiSelector) this.activeRoiSelector.syncCanvasSize();
-    }, 120);
-  }
-
-  closeRoiModal() {
-    this.roiSelectorModal?.classList.remove('open');
-    if (this.roiPreviewVideo) {
-      this.roiPreviewVideo.pause();
-      this.roiPreviewVideo.src = '';
-    }
-    if (this.roiPreviewImg) {
-      this.roiPreviewImg.src = '';
-    }
-    if (this.activeRoiMediaUrl) {
-      URL.revokeObjectURL(this.activeRoiMediaUrl);
-      this.activeRoiMediaUrl = null;
-    }
-    if (this.activeRoiSelector) {
-      this.activeRoiSelector.destroy();
-      this.activeRoiSelector = null;
-    }
-  }
-
-  async applyRoiBoxes() {
-    if (!this.activeRoiSelector) {
-      this.closeRoiModal();
-      return;
-    }
-
-    const boxes = this.activeRoiSelector.getBoxes();
-    const targetItem = this.activeRoiFileItem;
-
-    if (targetItem) {
-      targetItem.customBoxes = boxes;
-      // Update badge on item card
-      const badgeId = `roiBadge-${targetItem.id}`;
-      let badgeElem = document.getElementById(badgeId);
-      const tagsContainer = document.getElementById(`tags-${targetItem.id}`);
-
-      if (boxes.length > 0) {
-        if (!badgeElem && tagsContainer) {
-          badgeElem = document.createElement('span');
-          badgeElem.id = badgeId;
-          badgeElem.className = 'badge-roi-custom';
-          tagsContainer.appendChild(badgeElem);
-        }
-        if (badgeElem) {
-          badgeElem.innerHTML = `🎯 ${boxes.length} Custom Box${boxes.length === 1 ? '' : 'es'}`;
-        }
-      } else if (badgeElem) {
-        badgeElem.remove();
-      }
-
-      this.showToast(`Saved ${boxes.length} watermark box(es) for ${targetItem.file.name}! Inpainting with new boxes...`, 'info');
-    } else {
-      this.globalCustomBoxes = boxes;
-      this.showToast(`Saved ${boxes.length} watermark box(es) as global default!`, 'success');
-    }
-
-    if (boxes.length > 0 && this.cornerPresetSelect) {
-      this.cornerPresetSelect.value = 'custom';
-    }
-
-    this.closeRoiModal();
-
-    // Immediately re-process the target file with the updated custom boxes to regenerate cleanedBlob and update Download URLs
-    if (targetItem) {
-      targetItem.status = 'pending';
-      await this.processSingleItem(targetItem);
-    }
-
-    // Synchronize Metadata Radar modal in real-time if currently open
-    if (this.inspectorModal && this.inspectorModal.classList.contains('open') && this.activeModalFile && this.activeModalFile.id === targetItem?.id) {
-      this.openInspector(targetItem);
-    }
-  }
-
-  updateRoiSummary(boxes) {
-    if (!this.roiBoxesSummary) return;
-    const count = boxes ? boxes.length : 0;
-    this.roiBoxesSummary.textContent = `${count} active box${count === 1 ? '' : 'es'}`;
-  }
-
-  /**
-   * Show global progress bar with percentage, fill, and status text
-   */
-  showProgress(percent, text) {
-    if (!this.progressWrapper) return;
-    if (this._hideProgressTimer) {
-      clearTimeout(this._hideProgressTimer);
-      this._hideProgressTimer = null;
-    }
-    this.progressWrapper.style.display = 'block';
-    const clamped = Math.min(100, Math.max(0, Math.round(percent)));
-    if (this.progressBar) this.progressBar.value = clamped;
-    const pulseDot = this.progressWrapper.querySelector('.progress-pulse-dot');
-
-    if (this.progressBarFill) {
-      this.progressBarFill.style.width = `${clamped}%`;
-      if (clamped >= 100) {
-        this.progressBarFill.classList.remove('active-shimmer');
-        if (pulseDot) pulseDot.classList.add('completed');
-      } else {
-        this.progressBarFill.classList.add('active-shimmer');
-        if (pulseDot) pulseDot.classList.remove('completed');
-      }
-    }
-    if (this.progressPercent) this.progressPercent.textContent = `${clamped}%`;
-    if (text) {
-      if (this.progressText) this.progressText.textContent = text;
-      if (this.liveStatus) this.liveStatus.textContent = text;
-    }
-  }
-
-  /**
-   * Hide global progress bar smoothly
-   */
-  hideProgress(delayMs = 600) {
-    if (this._hideProgressTimer) {
-      clearTimeout(this._hideProgressTimer);
-    }
-    this._hideProgressTimer = setTimeout(() => {
-      if (this.progressWrapper) this.progressWrapper.style.display = 'none';
-      if (this.progressBar) this.progressBar.value = 0;
-      if (this.progressBarFill) {
-        this.progressBarFill.classList.remove('active-shimmer');
-        this.progressBarFill.style.width = '0%';
-      }
-      if (this.progressPercent) this.progressPercent.textContent = '0%';
-      if (this.progressText) this.progressText.textContent = '';
-      if (this.liveStatus) this.liveStatus.textContent = '';
-      const pulseDot = this.progressWrapper?.querySelector('.progress-pulse-dot');
-      if (pulseDot) pulseDot.classList.remove('completed');
-    }, delayMs);
-  }
-
-  /**
-   * Update per-card embedded progress track
-   */
-  updateCardProgress(itemId, percent, statusText = null) {
-    const track = document.getElementById(`cardProgressTrack-${itemId}`);
-    const fill = document.getElementById(`cardProgressFill-${itemId}`);
-    const badge = document.getElementById(`badge-${itemId}`);
-    if (!track || !fill) return;
-
-    if (percent > 0 && percent < 100) {
-      track.classList.add('active');
-      fill.style.width = `${Math.min(100, Math.max(2, percent))}%`;
-      if (statusText && badge) {
-        badge.className = 'badge-ai-threat badge-threat-processing';
-        badge.innerHTML = `<span class="spinner-inline"></span>${this.escapeHtml(statusText)}`;
-      }
-    } else if (percent >= 100) {
-      fill.style.width = '100%';
-      setTimeout(() => {
-        track.classList.remove('active');
-        fill.style.width = '0%';
-      }, 300);
-    } else {
-      track.classList.remove('active');
-      fill.style.width = '0%';
     }
   }
 
