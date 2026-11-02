@@ -76,7 +76,12 @@ async function runMobileTests() {
   const server = await startServer(3001);
   console.log('[0] Local test server running on http://localhost:3001');
 
-  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  let browser;
+  try {
+    browser = await chromium.launch({ channel: 'chrome', headless: true });
+  } catch {
+    browser = await chromium.launch({ headless: true });
+  }
 
   // Emulate Mobile Device (iPhone 13 / 14: 390 x 844, 3x DPI, touch enabled)
   const context = await browser.newContext({

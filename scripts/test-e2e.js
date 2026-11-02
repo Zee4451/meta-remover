@@ -300,10 +300,17 @@ async function runBrowserPlaywrightTests() {
   const staticServer = await startStaticServer(3000);
   console.log('Local test server started on http://localhost:3000');
 
-  const browser = await chromium.launch({
-    channel: 'chrome',
-    headless: true
-  });
+  let browser;
+  try {
+    browser = await chromium.launch({
+      channel: 'chrome',
+      headless: true
+    });
+  } catch {
+    browser = await chromium.launch({
+      headless: true
+    });
+  }
 
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },

@@ -39,7 +39,7 @@ export class CleanerHub {
 
     if (isVideo) {
       const explicitVideoBoxes = (options.customBoxes && options.customBoxes.length > 0);
-      if (removeWatermark || explicitVideoBoxes) {
+      if (explicitVideoBoxes || (removeWatermark && options.scrubMode !== 'deep')) {
         // High-Bitrate Frame-Accurate Video Watermark Inpainting
         const videoResult = await VideoWatermarkCleaner.clean(file, {
           removeWatermark: true,
@@ -52,11 +52,14 @@ export class CleanerHub {
         cleanedBlob = (videoResult && videoResult.blob) ? videoResult.blob : videoResult;
         watermarkMetrics = (videoResult && videoResult.watermarkMetrics) ? videoResult.watermarkMetrics : null;
 
-        if (watermarkMetrics && watermarkMetrics.watermarkDetected) {
+        if (videoResult && videoResult.fallbackLossless) {
+          cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
+          watermarkMetrics = null;
+        } else if (watermarkMetrics && watermarkMetrics.watermarkDetected) {
           cleaningMethod = explicitVideoBoxes ? 'user-box-inpaint' : 'video-watermark-transcode';
         } else {
           // If no watermark detected and no custom boxes, pure container clean was performed
-          cleaningMethod = 'lossless';
+          cleaningMethod = (options.scrubMode === 'deep') ? 'lossless-video-fallback' : 'lossless';
           watermarkMetrics = null;
         }
       } else if (options.scrubMode === 'deep') {

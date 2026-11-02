@@ -383,7 +383,10 @@ export class VideoWatermarkCleaner {
     const preVal = await this.validateMedia(file, 8000);
     if (!preVal.valid) {
       console.warn('[VideoCleaner] Pre-validation failed:', preVal.error);
-      throw new Error(`Video validation failed: ${preVal.error}. Processing halted to prevent stalls.`);
+      if (options.customBoxes && options.customBoxes.length > 0) {
+        throw new Error(`Video validation failed: ${preVal.error}. Processing halted to prevent stalls.`);
+      }
+      return { blob: containerCleanedBlob, watermarkMetrics: null, fallbackLossless: true };
     }
 
     const nativeWidth = preVal.width || 1920;

@@ -51,7 +51,12 @@ async function main() {
   const server = await startServer(3456);
   console.log('[0] Local HTTP server started at http://localhost:3456');
 
-  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  let browser;
+  try {
+    browser = await chromium.launch({ channel: 'chrome', headless: true });
+  } catch {
+    browser = await chromium.launch({ headless: true });
+  }
   const page = await browser.newPage();
 
   // Load input test video
