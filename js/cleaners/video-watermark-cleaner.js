@@ -5,6 +5,7 @@
  */
 
 import { MP4Cleaner } from './mp4-cleaner.js';
+import { WebMCleaner } from './webm-cleaner.js';
 import { WatermarkRemover } from './watermark-remover.js';
 
 /**
@@ -254,6 +255,9 @@ export class VideoWatermarkCleaner {
       let isAborted = false;
       let isFinished = false;
       let animHandle = null;
+      let audioCtx = null;
+
+      const sourceHasAudio = MP4Cleaner.hasAudioTrack(originalBuffer);
 
       const video = document.createElement('video');
       video.muted = true;
@@ -276,6 +280,10 @@ export class VideoWatermarkCleaner {
           animHandle = null;
         }
         if (safetyTimeout) clearTimeout(safetyTimeout);
+        if (audioCtx && audioCtx.state !== 'closed') {
+          try { audioCtx.close(); } catch {}
+          audioCtx = null;
+        }
         URL.revokeObjectURL(fileUrl);
         video.pause();
         video.removeAttribute('src');
@@ -552,33 +560,67 @@ export class VideoWatermarkCleaner {
           const stream = canvas.captureStream ? canvas.captureStream(30) : canvas.captureStream();
 
           // Pipe audio track from video element if present so audio is 100% preserved
-          try {
-            const vStream = video.captureStream ? video.captureStream() : (video.mozCaptureStream ? video.mozCaptureStream() : null);
-            const aTrack = vStream?.getAudioTracks()[0];
-            if (aTrack) stream.addTrack(aTrack);
-          } catch {}
+          if (sourceHasAudio) {
+            try {
+              const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+              if (AudioCtxClass) {
+                audioCtx = new AudioCtxClass();
+                const audioSource = audioCtx.createMediaElementSource(video);
+                const audioDest = audioCtx.createMediaStreamDestination();
+                audioSource.connect(audioDest);
+                // Connected ONLY to audioDest (NOT to audioCtx.destination),
+                // so user speakers stay 100% silent while audio is cleanly captured
+                const aTracks = audioDest.stream.getAudioTracks();
+                if (aTracks && aTracks.length > 0) {
+                  stream.addTrack(aTracks[0]);
+                  video.muted = false; // Unmute video element so WebAudio receives audio frames
+                }
+              }
+            } catch (aErr) {
+              console.warn('Audio capture setup warning:', aErr);
+            }
+          }
+
+          const hasAudio = stream.getAudioTracks().length > 0;
 
           // Hardware-accelerated smooth bitrate (preserves ~20 MB file size without compression loss)
           const targetBitrate = getRealtimeVideoBitrate(file.size, duration, 2.5, 20_000_000, 45_000_000);
 
-          // Codec Hierarchy - Prioritize High Profile Level 4.0 for zero visual compression artifacts
-          const preferredMimes = [
-            'video/mp4;codecs="avc1.640028,mp4a.40.2"', // High Profile Level 4.0 + AAC (Maximum quality, 8x8 DCT)
+          // Codec Hierarchy - Select candidate MIME based on whether audio track is actually present!
+          // If video has no audio (e.g. AI generated video from Google Flow / Veo / Gemini),
+          // requesting an AAC audio codec (mp4a.40.2) causes MediaRecorder in Chromium to stall or emit 0 chunks!
+          const preferredMimesWithAudio = [
+            'video/mp4;codecs="avc1.640028,mp4a.40.2"', // High Profile Level 4.0 + AAC
             'video/mp4;codecs="avc1.4d4028,mp4a.40.2"', // Main Profile Level 4.0 + AAC
             'video/mp4;codecs="avc1.42E01F,mp4a.40.2"', // Constrained Baseline Level 3.1 + AAC
-            'video/mp4;codecs=avc1',
+            'video/mp4;codecs=avc1,mp4a.40.2',
             'video/mp4',
             'video/webm;codecs="vp9,opus"',
-            'video/webm;codecs=vp9',
+            'video/webm;codecs="vp8,opus"',
             'video/webm'
           ];
-          const selectedMime = preferredMimes.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+          const preferredMimesVideoOnly = [
+            'video/mp4;codecs="avc1.640028"',
+            'video/mp4;codecs="avc1.4d4028"',
+            'video/mp4;codecs="avc1.42E01F"',
+            'video/mp4;codecs=avc1',
+            'video/mp4',
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm'
+          ];
+          const candidateMimes = hasAudio ? preferredMimesWithAudio : preferredMimesVideoOnly;
+          const selectedMime = candidateMimes.find((m) => MediaRecorder.isTypeSupported(m)) || (hasAudio ? 'video/mp4' : 'video/webm');
 
-          const recorder = new MediaRecorder(stream, {
+          const recorderOptions = {
             mimeType: selectedMime,
-            videoBitsPerSecond: targetBitrate,
-            audioBitsPerSecond: 320_000
-          });
+            videoBitsPerSecond: targetBitrate
+          };
+          if (hasAudio) {
+            recorderOptions.audioBitsPerSecond = 320_000;
+          }
+
+          const recorder = new MediaRecorder(stream, recorderOptions);
 
           const chunks = [];
           recorder.ondataavailable = (e) => {
@@ -593,7 +635,17 @@ export class VideoWatermarkCleaner {
               const rawBlob = new Blob(chunks, { type: cleanMime });
               try {
                 const rawBuffer = await rawBlob.arrayBuffer();
-                const scrubbedBytes = MP4Cleaner.clean(rawBuffer);
+                let scrubbedBytes = cleanMime.includes('mp4') ? MP4Cleaner.clean(rawBuffer) : new Uint8Array(rawBuffer);
+
+                // Patch duration in container headers (mvhd, tkhd, mdhd, mehd for MP4; 0x4489 for WebM)
+                // This resolves the 00:00:00 duration bug on Instagram, iOS, Android, and QuickTime!
+                const finalDuration = (Number.isFinite(duration) && duration > 0) ? duration : 4.0;
+                if (cleanMime.includes('mp4')) {
+                  scrubbedBytes = MP4Cleaner.patchDuration(scrubbedBytes, finalDuration);
+                } else if (cleanMime.includes('webm')) {
+                  scrubbedBytes = WebMCleaner.patchDuration(scrubbedBytes, finalDuration);
+                }
+
                 const cleanedVideoBlob = new Blob([scrubbedBytes], { type: cleanMime });
                 resolve({
                   blob: cleanedVideoBlob,
@@ -604,7 +656,8 @@ export class VideoWatermarkCleaner {
                     inpaintType: 'video-frame-inpaint'
                   }
                 });
-              } catch {
+              } catch (err) {
+                console.warn('Post-process duration patch error, returning raw blob:', err);
                 resolve({
                   blob: rawBlob,
                   watermarkMetrics: {

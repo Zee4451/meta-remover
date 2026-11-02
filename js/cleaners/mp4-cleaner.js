@@ -168,4 +168,161 @@ export class MP4Cleaner {
       bytes[i] = 0;
     }
   }
+
+  /**
+   * Inspects MP4/MOV container to verify whether it contains any audio track ('soun')
+   * @param {ArrayBuffer|Uint8Array} buffer 
+   * @returns {boolean} True if an audio track exists, false if video-only
+   */
+  static hasAudioTrack(buffer) {
+    if (!buffer) return false;
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const len = bytes.length;
+
+    let foundAudio = false;
+
+    function walk(start, end) {
+      let cur = start;
+      while (cur + 8 <= end && !foundAudio) {
+        let boxSize = view.getUint32(cur, false);
+        let headerSize = 8;
+        if (boxSize === 0) boxSize = end - cur;
+        else if (boxSize === 1) {
+          if (cur + 16 > end) break;
+          const high = view.getUint32(cur + 8, false);
+          const low = view.getUint32(cur + 12, false);
+          boxSize = high * 4294967296 + low;
+          headerSize = 16;
+        }
+        if (boxSize < headerSize || cur + boxSize > end || isNaN(boxSize)) break;
+
+        const boxType = String.fromCharCode(
+          bytes[cur + 4], bytes[cur + 5], bytes[cur + 6], bytes[cur + 7]
+        );
+
+        if (boxType === 'hdlr') {
+          if (cur + 20 <= cur + boxSize) {
+            const handler = String.fromCharCode(
+              bytes[cur + 16], bytes[cur + 17], bytes[cur + 18], bytes[cur + 19]
+            );
+            if (handler === 'soun') {
+              foundAudio = true;
+              return;
+            }
+          }
+        }
+
+        const containerBoxes = ['moov', 'trak', 'mdia', 'minf'];
+        if (containerBoxes.includes(boxType)) {
+          walk(cur + headerSize, cur + boxSize);
+        }
+
+        cur += boxSize;
+      }
+    }
+
+    walk(0, len);
+    return foundAudio;
+  }
+
+  /**
+   * Patches duration in MP4/MOV containers (mvhd, tkhd, mdhd, mehd)
+   * Resolves the "00:00:00 duration" bug on Instagram, QuickTime, iOS, Android, and video editors
+   * 
+   * @param {ArrayBuffer|Uint8Array} buffer 
+   * @param {number} targetDurationInSeconds
+   * @returns {Uint8Array}
+   */
+  static patchDuration(buffer, targetDurationInSeconds) {
+    if (!targetDurationInSeconds || targetDurationInSeconds <= 0 || !Number.isFinite(targetDurationInSeconds)) {
+      return buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    }
+
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const len = bytes.length;
+
+    let movieTimescale = 1000;
+
+    function walk(start, end) {
+      let cur = start;
+      while (cur + 8 <= end) {
+        let boxSize = view.getUint32(cur, false);
+        let headerSize = 8;
+
+        if (boxSize === 0) {
+          boxSize = end - cur;
+        } else if (boxSize === 1) {
+          if (cur + 16 > end) break;
+          const high = view.getUint32(cur + 8, false);
+          const low = view.getUint32(cur + 12, false);
+          boxSize = high * 4294967296 + low;
+          headerSize = 16;
+        }
+
+        if (boxSize < headerSize || cur + boxSize > end || isNaN(boxSize)) break;
+
+        const boxType = String.fromCharCode(
+          bytes[cur + 4], bytes[cur + 5], bytes[cur + 6], bytes[cur + 7]
+        );
+
+        if (boxType === 'mvhd') {
+          const v = bytes[cur + 8];
+          movieTimescale = v === 0 ? view.getUint32(cur + 20, false) : view.getUint32(cur + 28, false);
+          if (!movieTimescale || isNaN(movieTimescale)) movieTimescale = 1000;
+
+          const movieDur = Math.round(targetDurationInSeconds * movieTimescale);
+          if (v === 0) {
+            view.setUint32(cur + 24, movieDur, false);
+          } else {
+            view.setUint32(cur + 32, 0, false);
+            view.setUint32(cur + 36, movieDur, false);
+          }
+        } else if (boxType === 'tkhd') {
+          const v = bytes[cur + 8];
+          // Track duration in tkhd is in movieTimescale units!
+          const trackDur = Math.round(targetDurationInSeconds * movieTimescale);
+          if (v === 0) {
+            view.setUint32(cur + 28, trackDur, false);
+          } else {
+            view.setUint32(cur + 32, 0, false);
+            view.setUint32(cur + 36, trackDur, false);
+          }
+        } else if (boxType === 'mdhd') {
+          const v = bytes[cur + 8];
+          const mediaTimescale = v === 0 ? view.getUint32(cur + 20, false) : view.getUint32(cur + 28, false);
+          const ts = (mediaTimescale && !isNaN(mediaTimescale)) ? mediaTimescale : movieTimescale;
+          // Media duration in mdhd is in mediaTimescale units!
+          const mediaDur = Math.round(targetDurationInSeconds * ts);
+          if (v === 0) {
+            view.setUint32(cur + 24, mediaDur, false);
+          } else {
+            view.setUint32(cur + 32, 0, false);
+            view.setUint32(cur + 36, mediaDur, false);
+          }
+        } else if (boxType === 'mehd') {
+          // Movie Extends Header in fragmented MP4 mvex box
+          const v = bytes[cur + 8];
+          const fragDur = Math.round(targetDurationInSeconds * movieTimescale);
+          if (v === 0) {
+            view.setUint32(cur + 12, fragDur, false);
+          } else {
+            view.setUint32(cur + 12, 0, false);
+            view.setUint32(cur + 16, fragDur, false);
+          }
+        }
+
+        const containerBoxes = ['moov', 'trak', 'mdia', 'minf', 'stbl', 'mvex'];
+        if (containerBoxes.includes(boxType)) {
+          walk(cur + headerSize, cur + boxSize);
+        }
+
+        cur += boxSize;
+      }
+    }
+
+    walk(0, len);
+    return bytes;
+  }
 }

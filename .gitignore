@@ -12,6 +12,7 @@ node_modules/
 *.webp
 !js/vendor/*
 fixtures/
+scratch/
 
 # Production & Vercel
 .vercel
