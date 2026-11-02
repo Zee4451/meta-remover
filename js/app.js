@@ -225,17 +225,36 @@ class App {
       this.addFiles([file]);
     });
 
-    // Scrubbing Mode Toggle
-    this.modeLossless.addEventListener('click', () => {
-      this.currentMode = 'lossless';
-      this.modeLossless.classList.add('selected');
-      this.modeDeep.classList.remove('selected');
+    // Scrubbing Mode Toggle (Accessible Radio Cards)
+    const selectMode = (mode) => {
+      this.currentMode = mode;
+      if (mode === 'lossless') {
+        this.modeLossless.classList.add('selected');
+        this.modeLossless.setAttribute('aria-checked', 'true');
+        this.modeDeep.classList.remove('selected');
+        this.modeDeep.setAttribute('aria-checked', 'false');
+      } else {
+        this.modeDeep.classList.add('selected');
+        this.modeDeep.setAttribute('aria-checked', 'true');
+        this.modeLossless.classList.remove('selected');
+        this.modeLossless.setAttribute('aria-checked', 'false');
+      }
+    };
+
+    this.modeLossless.addEventListener('click', () => selectMode('lossless'));
+    this.modeLossless.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        selectMode('lossless');
+      }
     });
 
-    this.modeDeep.addEventListener('click', () => {
-      this.currentMode = 'deep';
-      this.modeDeep.classList.add('selected');
-      this.modeLossless.classList.remove('selected');
+    this.modeDeep.addEventListener('click', () => selectMode('deep'));
+    this.modeDeep.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        selectMode('deep');
+      }
     });
 
     // Batch Actions

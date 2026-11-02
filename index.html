@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
-  <link rel="stylesheet" href="styles.css?v=13">
+  <link rel="stylesheet" href="styles.css?v=15">
   <!-- Local Offline-First Vendor Libraries -->
   <script src="js/vendor/jszip.min.js"></script>
   <script src="js/vendor/FileSaver.min.js"></script>
@@ -149,12 +149,17 @@
             </svg>
             Scrubbing Engine Settings
           </div>
+          <div class="panel-badge-pill">
+            <span>⚡</span> 100% Client-Side • Zero Quality Loss
+          </div>
         </div>
 
-        <div class="settings-grid">
+        <!-- Section 1: Engine Mode Selector (Compact 2-Card Segmented Choice) -->
+        <div class="engine-modes-grid" role="radiogroup" aria-label="Processing Engine Mode">
           <!-- Mode 1: Lossless -->
-          <div class="mode-card selected" id="modeLossless" data-mode="lossless">
+          <div class="mode-card selected" id="modeLossless" data-mode="lossless" role="radio" aria-checked="true" tabindex="0">
             <div class="mode-card-header">
+              <span class="mode-radio-dot"></span>
               <span class="mode-title">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 2v20"/><path d="m17 5-5-3-5 3"/><path d="m17 19-5 3-5-3"/>
@@ -164,13 +169,14 @@
               <span class="mode-badge badge-recommended">Recommended</span>
             </div>
             <p class="mode-desc">
-              Bit-for-bit lossless removal of all C2PA manifests, EXIF, IPTC, XMP, PNG text chunks, and MP4 atoms. <strong>Zero recompression</strong>, preserves exact original image & video quality.
+              Bit-for-bit lossless removal of C2PA, EXIF, IPTC, XMP, & MP4 atoms. <strong>Zero recompression</strong>, preserves exact original image & video quality.
             </p>
           </div>
 
           <!-- Mode 2: Deep Canvas Scrub -->
-          <div class="mode-card" id="modeDeep" data-mode="deep">
+          <div class="mode-card" id="modeDeep" data-mode="deep" role="radio" aria-checked="false" tabindex="0">
             <div class="mode-card-header">
+              <span class="mode-radio-dot"></span>
               <span class="mode-title">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M2 12h20"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6"/>
@@ -181,12 +187,15 @@
               <span class="mode-badge badge-deep">Max Paranoia</span>
             </div>
             <p class="mode-desc">
-              Re-renders image onto a pure Canvas pixel buffer. Applies imperceptible micro-frequency jitter to neutralize invisible watermarks (SynthID) and destroys steganography.
+              Re-renders pixels onto a Canvas buffer. Neutralizes invisible watermarks (SynthID) via sparse ±1 LSB micro-frequency jitter (PSNR &gt; 58 dB).
             </p>
           </div>
+        </div>
 
-          <!-- Feature Toggles -->
-          <div class="toggles-group">
+        <!-- Section 2: Active Protection Rules (2-Column Balanced Grid) -->
+        <div class="toggles-grid">
+          <!-- Column 1: Metadata & Provenance -->
+          <div class="toggles-column">
             <div class="toggle-item">
               <div class="toggle-info">
                 <span class="toggle-name">Strip C2PA Content Credentials</span>
@@ -211,6 +220,20 @@
 
             <div class="toggle-item">
               <div class="toggle-info">
+                <span class="toggle-name">Strip EXIF & GPS Coordinates</span>
+                <span class="toggle-sub">Camera serials, device location, timestamps</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggleGPS" checked aria-label="Strip EXIF and GPS Coordinates">
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Column 2: Steganography & Visible Watermarks -->
+          <div class="toggles-column">
+            <div class="toggle-item">
+              <div class="toggle-info">
                 <span class="toggle-name">Anti-SynthID Frequency Jitter</span>
                 <span class="toggle-sub">Disrupts imperceptible generative watermark patterns</span>
               </div>
@@ -220,21 +243,10 @@
               </label>
             </div>
 
-            <div class="toggle-item">
-              <div class="toggle-info">
-                <span class="toggle-name">Strip EXIF & GPS Coordinates</span>
-                <span class="toggle-sub">Camera serials, device location, timestamps</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="toggleGPS" checked aria-label="Strip EXIF and GPS Coordinates">
-                <span class="slider"></span>
-              </label>
-            </div>
-
             <div class="toggle-item watermark-toggle-item">
               <div class="toggle-info">
-                <span class="toggle-name">Remove Visible AI Corner Watermark (Gemini / Veo / DALL·E)</span>
-                <span class="toggle-sub">Auto-detects & seamlessly inpaints bottom-right AI sparkle/logo watermarks with zero full-frame quality loss</span>
+                <span class="toggle-name">Remove Visible AI Watermark</span>
+                <span class="toggle-sub">Auto-detects & seamlessly inpaints corner AI sparkle/logo</span>
               </div>
               <label class="switch">
                 <input type="checkbox" id="toggleWatermark" checked aria-label="Remove Visible AI Corner Watermark">
@@ -595,6 +607,6 @@
   <div class="toast-container" id="toastContainer" aria-live="polite"></div>
 
   <!-- Application Script -->
-  <script type="module" src="js/app.js?v=14"></script>
+  <script type="module" src="js/app.js?v=15"></script>
 </body>
 </html>
